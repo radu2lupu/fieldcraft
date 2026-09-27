@@ -25,9 +25,9 @@ crates/
   fieldcraft-extract/     transcript ingestion pipeline
   fieldcraft-cli/         CLI entrypoint
   fieldcraft-server/      HTTP server
-eval/             evaluation harnesses and results (see eval/README.md)
+eval/             experiment harnesses (see eval/README.md)
 docs/             architecture, operations and design notes
-scripts/          utility and evaluation scripts
+scripts/          operational scripts (service install, e2e loop, status)
 hooks/            Claude Code plugin hooks
 install/          hooks and agent instructions installed by install.sh
 ```
@@ -39,14 +39,11 @@ cargo test --workspace
 cargo clippy --workspace -- -D warnings
 ```
 
-## Evaluation-first development
+## Changing retrieval or scoring
 
-Changes to retrieval, extraction, or scoring should come with evidence. The outcome harness is
-`eval/usefulness_harness/` (warm vs cold agent runs on SWE-bench Verified tasks); see
-[eval/README.md](eval/README.md) for what each suite measures and
-[docs/learning-optimization-loop.md](docs/learning-optimization-loop.md) for the methodology.
-
-PRs that change retrieval behavior without benchmark numbers will be asked to add them.
+Say how you checked the change. The harnesses under `eval/` (a warm-vs-cold agent run and a
+logged-query replay) are a starting point; for small changes a before/after with `fieldcraft query`
+on your own store, pasted into the PR, is enough.
 
 ## Code style
 

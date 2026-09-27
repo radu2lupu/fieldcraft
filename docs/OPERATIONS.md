@@ -141,8 +141,8 @@ Live on the reference shared-server deployment since 2026-07-01/02. Full design 
   ONE derived Claim per cluster. Guardrails: must cite `>= 3` sources (audited `derived_from` events),
   lands `state='provisional'`, originals are retained untouched. A `confirmed` outcome on a
   provisional record promotes it to `active` (`promoted_active` audit event). Dry-run on production
-  found 3 clusters; `--apply` was UNLOCKED 2026-07-02: the G1 sweep completed at n=19 (steps delta -3.47, 95% CI [-6.58, -0.53], significant; resolved +5.3pts; 0/19 cold contamination) and the first supervised
-  apply produced 3 provisional derived claims on production. Scorecard: `eval/usefulness_harness/RESULTS.md`.
+  found 3 clusters; `--apply` has run nightly on the reference deployment since 2026-07-02 under the
+  guardrails above.
 
 ### Env vars
 

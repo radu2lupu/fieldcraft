@@ -1,26 +1,14 @@
-# Evaluation
+# Experiments
 
-What ships in this directory, and what does not.
+Fieldcraft has no maintained benchmark suite and makes no performance claims. This directory
+holds two harnesses from one-off experiments; the numbers in their write-ups are dated snapshots of
+those runs, not statements about the current system.
 
 | Path | What it is |
 |---|---|
-| [`usefulness_harness/`](usefulness_harness/) | The G1 warm-vs-cold harness: real SWE-bench Verified tasks run by a coding agent with memory served (warm) and with memory isolated (cold), scored by the tasks' own oracle tests, paired bootstrap for confidence intervals. Scorecard: [`usefulness_harness/RESULTS.md`](usefulness_harness/RESULTS.md). |
-| [`RESULTS.md`](RESULTS.md) | Older retrieval plumbing checks (gold-set pass rate, latency) and the Gauntlet ambiguity suite. These measure plumbing, not task outcomes. |
-| [`retrieval_usefulness/`](retrieval_usefulness/) | Reports from the skill-retrieval reveal/abstain eval (the skill-intelligence research track). |
-| [`jev_rerank/`](jev_rerank/) | Replay of 865 logged queries through a judgment model (TypeSafe Jev) as a reranker, scored against later-cited lessons. Negative result; harness included. |
+| [`usefulness_harness/`](usefulness_harness/) | Runs a coding agent on real tasks twice, once with a lesson served and once with memory isolated, and scores both with the tasks' own tests. Shell scripts plus a small Rust bootstrap tool. |
+| [`jev_rerank/`](jev_rerank/) | Replays logged queries through an external judgment model as a reranker over the served lessons and compares the order against what sessions later cited. jq, curl and awk. |
 
-## Not in the public tree
-
-Raw run logs and corpora from the skill-intelligence research track (`oracle_validation_v1/`,
-`skills/`, `patch_planning/`, retrieval trace JSON) are not published. They contained absolute
-local paths, private session content, and third-party skill text whose licenses do not clearly
-allow redistribution. The reports that summarize them remain where they are cited. Vendored
-third-party benchmarks (for example SWE-Bench-CL) are fetched separately rather than committed;
-`benchmarks/` is gitignored.
-
-## Reading the numbers
-
-The strongest current evidence is the G1 sweep: n=19 tasks from one repository family, one run
-per arm, with idealized (gold) lessons. It shows a significant reduction in agent steps and a
-directional, non-significant improvement in resolution rate. Treat it as evidence that the
-delivery path works, not as a general benchmark result. See the caveats in the scorecard.
+Raw data from earlier research (run logs, corpora, third-party skill text) is not in the public
+tree: it contained local paths, private session content, and material whose licenses do not
+clearly allow redistribution.

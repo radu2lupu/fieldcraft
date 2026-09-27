@@ -89,7 +89,8 @@ shares one store, each with its own token.
 - **Not fully local.** The store is a local SQLite file, but lessons and queries are embedded with
   Google's Gemini API. Without a key, retrieval falls back to keyword search and the vector-based
   maintenance (merging, near-twin retirement, restore, consolidation) does nothing.
-- **No public benchmark win yet.** See below.
+- **No performance claims.** The outcome loop is instrumented and running; that it improves
+  agent results is not something we assert yet.
 - **The outcome signal is unaudited.** Nobody has hand-checked a sample of confirmed and ignored
   events for precision. File-overlap confirmation matches file basenames, so a common name such as
   `main.rs` can confirm an unrelated lesson.
@@ -118,16 +119,9 @@ shares one store, each with its own token.
   (`FIELDCRAFT_DYNAMIC_CONF=1`) exists and is off by default.
 - **Experimental:** the consolidation ("dream") pass, whose output quality has not been measured;
   the background distiller.
-- **Evaluation:** the one end-to-end measurement is a 19-task SWE-bench Verified study (pytest
-  only) in which hand-written, idealized lessons were put in the prompt. Agents took about 19% fewer
-  steps (−3.47 steps, 95% CI −6.58 to −0.53). The changes in resolution rate and tokens were not
-  statistically significant. Other retrieval checks are small or synthetic, and an earlier held-out
-  patch-planning test showed no gain over a no-retrieval baseline. Details:
-  [eval/README.md](../eval/README.md).
-
-The next milestone is a reproducible benchmark on the real product path: lessons written by the
-distiller rather than by hand, retrieved through the hooks, several repositories, several runs per
-arm, and a memory-suppressed control. See [ROADMAP.md](../ROADMAP.md).
+What would change the picture is measured usefulness on the real product path: lessons written by
+the distiller rather than by hand, retrieved through the hooks, across several repositories, with a
+memory-suppressed control. See [ROADMAP.md](../ROADMAP.md).
 
 ## Sources
 
@@ -145,7 +139,3 @@ arm, and a memory-suppressed control. See [ROADMAP.md](../ROADMAP.md).
 12. ByteRover CLI: https://github.com/campfirein/byterover-cli
 13. ReasoningBank: https://research.google/blog/reasoningbank-enabling-agents-to-learn-from-experience/
 14. ACE (Agentic Context Engineering): https://arxiv.org/abs/2510.04618
-
-Related: SWE-ContextBench (https://arxiv.org/html/2602.08316) finds that correctly selected
-context helps coding agents while unfiltered context can hurt, which is the retrieval-precision
-problem Fieldcraft's outcome tracking is aimed at.

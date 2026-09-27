@@ -38,7 +38,7 @@ These corrections should be folded into the plan before any Phase 1 implementati
 ## What's verified
 
 - All three new docs exist at expected paths
-- Cross-references point to existing files (`docs/plans/cue-bundle-retrieval.md`, `docs/research/human-memory-recall.md`, `docs/plans/closed-loop-learning.md`, `eval/RESULTS.md`)
+- Cross-references point to existing files (`docs/plans/cue-bundle-retrieval.md`, `docs/research/human-memory-recall.md`, `docs/plans/closed-loop-learning.md` (never landed), `eval/RESULTS.md`)
 
 ## What's not verified
 
@@ -49,5 +49,5 @@ These corrections should be folded into the plan before any Phase 1 implementati
 ## Related
 
 - Plan: [docs/plans/cue-bundle-retrieval.md](../docs/plans/cue-bundle-retrieval.md)
-- Research: [docs/research/human-memory-recall.md](../docs/research/human-memory-recall.md)
-- Superseded prior plan: [docs/plans/closed-loop-learning.md](../docs/plans/closed-loop-learning.md)
+- Research: docs/research/human-memory-recall.md (not in the public tree)
+- Superseded prior plan: docs/plans/closed-loop-learning.md (never landed)

@@ -79,7 +79,7 @@ Five payload types map to the five `KnowledgeKind` values:
 
 ### Phase semantics
 
-Phase tagging is inspired by **Shen et al. 2026 (arXiv:2602.21611)** — *"Structurally Aligned Subtask-Level Memory for Software Engineering Agents"*. Fieldcraft's phase comes from a keyword heuristic, not the paper's method. The paper reports that subtask-aligned memory improves mean Pass@1 on SWE-bench Verified by +4.7 pp on average across backbones; Fieldcraft has not measured the effect of its own phase boost.
+Phase tagging is inspired by **Shen et al. 2026 (arXiv:2602.21611)** — *"Structurally Aligned Subtask-Level Memory for Software Engineering Agents"*. Fieldcraft's phase comes from a keyword heuristic, not the paper's method. Fieldcraft has not measured the effect of its own phase boost.
 
 The four phases:
 - **Analyze** — understanding code, invariants, module structure ("what/why")
@@ -145,7 +145,7 @@ The schema has evolved by additive migration:
 2. **Lesson → skill / AGENTS.md promotion is `--apply`-gated.** `fieldcraft promote` lists high-confirm `procedure`/`directive` workhorses by default and writes nothing. `--apply` requires `--id` (no bulk write, no hook/cron path). The original lesson is retained; provenance is a `knowledge_events` row with `event_type = lesson_promoted`. See [docs/promote-checklist.md](docs/promote-checklist.md).
 3. **Schema migrations must be idempotent.** Use `run_migration()`; never raw `execute_batch` on ALTER TABLE.
 4. **FTS5 mirroring is trigger-driven.** Don't write to `knowledge_fts` directly — INSERT/DELETE/UPDATE triggers on `knowledge` keep it in sync.
-5. **Dense vectors live alongside records.** No separate vector store. Migration from Qdrant happened 2026-04-01 (see [eval/RESULTS.md](eval/RESULTS.md)).
+5. **Dense vectors live alongside records.** No separate vector store. Migration from Qdrant happened 2026-04-01.
 
 ---
 
@@ -297,24 +297,9 @@ order: codex preferred, then grok, then claude, then marker-only.
 
 ---
 
-## 7. Eval Infrastructure
+## 7. Experiments
 
-Evaluation-first development: every architectural change is measured against the benchmark suite before merging. See [eval/RESULTS.md](eval/RESULTS.md).
-
-Eval suites in the public tree (see [eval/README.md](eval/README.md)):
-
-- `usefulness_harness/` — G1 warm-vs-cold outcome harness on SWE-bench Verified tasks (real agent runs, oracle tests, paired bootstrap). Scorecard: `eval/usefulness_harness/RESULTS.md`.
-- `retrieval_usefulness/` — reports from the skill-retrieval reveal/abstain eval.
-- `RESULTS.md` — older retrieval plumbing checks and the Gauntlet suite.
-
-Raw run logs and corpora from the skill-intelligence research track (`patch_planning/`, `oracle_validation_v1/`, `skills/`) are kept out of the public tree; see eval/README.md.
-
-Latest plumbing numbers (per RESULTS.md; measured before the switch to Gemini embeddings):
-- Gold-standard eval: 29/30 (97%), latency P50 96ms
-- Real-lesson benchmark: 10/15 PASS, 5/15 WEAK (low-quality episode records), 0 FAIL
-- Migration from Qdrant to SQLite-only completed 2026-04-01
-
----
+There is no maintained benchmark suite. Two harnesses live under `eval/` (see [eval/README.md](eval/README.md)): a warm-vs-cold agent run on real tasks (`usefulness_harness/`) and a logged-query replay through an external reranker (`jev_rerank/`). Numbers inside those directories are dated snapshots of one-off runs, not claims about the current system.
 
 ## 8. The Feedback Loop
 
@@ -406,5 +391,4 @@ After every live retrieval, `search_lessons_handler` spawns a background task (`
 - Memory lifecycle plan: [docs/plans/memory-lifecycle.md](docs/plans/memory-lifecycle.md)
 - Research backing for design choices: docs/plans/cue-bundle-retrieval.md (encoding specificity, testing effect)
 - Migration plan (partly shipped, partly stubbed): [docs/plans/cue-bundle-retrieval.md](docs/plans/cue-bundle-retrieval.md)
-- Eval methodology: [docs/learning-optimization-loop.md](docs/learning-optimization-loop.md)
 - Change log: [change_history/](change_history/)

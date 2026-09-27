@@ -24,14 +24,12 @@ the problem. `dynamic_confidence` is computed and recorded (still shadow mode �
 **Memory lifecycle (drop, consolidate, dream) is LIVE on the reference shared-server deployment.**
 Protection, scheduled reversible eviction, and query-triggered resurrection all run in production;
 the first production cull archived 41 records. `fieldcraft dream` (generative consolidation, L5)
-passed its G1 usefulness gate on 2026-07-02 (n=19) and runs nightly; derived claims land
-`provisional` until confirmed. Full
+runs nightly on the reference deployment; derived claims land `provisional` until confirmed. Full
 detail: [docs/plans/memory-lifecycle.md](docs/plans/memory-lifecycle.md) and
 [docs/OPERATIONS.md](docs/OPERATIONS.md).
 
-- North Star (unchanged): **session lift** ≥50% @ 30d / ≥70% @ 60d — see [ROADMAP.md](ROADMAP.md).
-  The lifecycle work's own north star is the G1 warm/cold usefulness delta
-  (`eval/usefulness_harness/`), not session-lift coverage.
+- Direction: make the recorded outcome signal steer ranking (dynamic confidence out of shadow
+  mode, cue-aware ranking as the authority); see [ROADMAP.md](ROADMAP.md).
 - Open work: take `dynamic_confidence` out of shadow mode after a precision audit; make cue-aware
   ranking the ranking authority; harden the usefulness evidence (repeated cold draws, a second repo
   family, distilled-quality lessons).

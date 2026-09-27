@@ -20,7 +20,7 @@ This reconciles [docs/plans/cue-bundle-retrieval.md](docs/plans/cue-bundle-retri
 | `dynamic_confidence` computed + stored | **Shipped** | `apply_feedback_outcome` updates it asymptotically. |
 | Merge / consolidation (cosine ≥ 0.92 + cue overlap) | **Shipped** | Non-destructive supersede + archive. ~8,955 merges done. Also merges byte-identical HTTP-written pairs with no embeddings. |
 | Memory lifecycle L1-L4 (protection, eviction, resurrection, RIF demotion) | **Shipped, live** | Live on the reference shared-server deployment (`FIELDCRAFT_LIFECYCLE_APPLY=1`, 6h cadence). First production cull archived 41 records; resurrection proven end-to-end. See [docs/plans/memory-lifecycle.md](docs/plans/memory-lifecycle.md). |
-| Memory lifecycle L5 (`fieldcraft dream` generative consolidation) | **Shipped, guarded** | G1 gate passed 2026-07-02 (n=19, `eval/usefulness_harness/RESULTS.md`); runs nightly. Derived claims land `provisional` and cite >= 3 sources; originals retained. |
+| Memory lifecycle L5 (`fieldcraft dream` generative consolidation) | **Shipped, guarded** | Runs nightly on the reference deployment. Derived claims land `provisional` and cite >= 3 sources; originals retained. |
 | Lesson → skill / AGENTS.md promote (`fieldcraft promote`) | **Shipped, `--apply` gated** | Dry-run lists workhorse `procedure`/`directive` lessons. `--apply --id` writes a local SKILL.md or AGENTS.md snippet and a `lesson_promoted` audit row. Never auto-promotes. See [docs/promote-checklist.md](docs/promote-checklist.md). |
 | **Cue-aware ranking as the ranking authority** | **Stubbed / gated** | `cue_match_factor` exists and is summed in, but is not yet the primary ranker. |
 | **`dynamic_confidence` used in retrieval ranking** | **Stubbed / gated** | Shadow mode — behind `FIELDCRAFT_DYNAMIC_CONF` (default OFF). Loop records, does not steer. |
@@ -41,16 +41,6 @@ This reconciles [docs/plans/cue-bundle-retrieval.md](docs/plans/cue-bundle-retri
 - 60 days: target ≥70% session lift
 
 Secondary signal: average rank of confirmed retrievals — sharp retrieval pushes confirms to ranks 1-2.
-
----
-
-## Eval Bar (claimable improvement)
-
-Per the 2026-05-10 retrieval benchmark handoff: **public benchmark improvement is not currently claimable.** Held-out 20-task patch-planning showed `format` (no retrieval) tied with `lean_exact` retrieval at file hit@1 1.000 and test hit@1 0.900, with retrieval using *more* tokens.
-
-The bar for any retrieval redesign is therefore not "no regression on retrieval_usefulness" but rather **demonstrably beat format-only baseline on a held-out task set**. Any plan exit criteria that say "no regression" must be tightened to this.
-
-Until that bar is hit on ≥50 held-out tasks, fieldcraft's retrieval quality is not externally defensible.
 
 ---
 
@@ -91,9 +81,8 @@ Done items are marked; the rest are ordered by priority within each group.
       the session, not only the dirty tree.
 - [ ] Take `dynamic_confidence` out of shadow with online interleaving (arm-tagged `retrieval_log`,
       compare confirm rate per arm), keeping `FIELDCRAFT_DYNAMIC_CONF` as the kill switch.
-- [ ] Reproducible public benchmark on the product path: pull-mode via hooks, distiller-written (not
-      gold) lessons, ≥2 repo families, ≥3 runs per arm, memory-suppressed control, paired bootstrap.
-      `docs/fieldcraft-eval-breakthrough-protocol.md` already specifies most of it.
+- [ ] Measure usefulness on the real product path: distiller-written lessons, retrieval through the
+      hooks, several repositories, repeated runs per arm, and a memory-suppressed control.
 - [ ] Golden retrieval eval (recall@30, MRR@10, precision@5, noise@5, abstain accuracy) gating scoring
       changes in CI.
 - [ ] Compute the North Star (session lift) in `fieldcraft stats`.
@@ -190,11 +179,7 @@ Schacter & Addis (2007). Memory is construction, not playback. For queries where
 
 ## Explicitly Out of Scope
 
-These have been considered and rejected (or deferred indefinitely):
-
-- **Variant-pair benchmark authoring before dogfooding signal.** Per the dogfooding-first decision (CH-NNNN): build the closed loop, use it personally for 2-4 weeks, then decide if a structured eval is worth authoring. Skepticism about token holes in eval infrastructure is justified by prior eval rounds not yielding actionable signal.
-- **SWE-bench longitudinal harness as the primary product eval.** Useful eventually as an external claim, but only after dogfooding shows fieldcraft visibly helps. Building it now would be a token sink.
-- **State-dependent memory** (Eich 1980). No analogue of agent "mood"; the closest proxy (phase/task) is already captured by phase tagging.
+These have been considered and rejected (or deferred indefinitely):- **State-dependent memory** (Eich 1980). No analogue of agent "mood"; the closest proxy (phase/task) is already captured by phase tagging.
 - **Sleep-staging consolidation timing.** SWS-specific neurochemistry has no software analogue. The offline-batch principle is adopted; the specific biological mechanism is not.
 
 ---

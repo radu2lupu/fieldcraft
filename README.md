@@ -23,6 +23,16 @@ store.
 
 ## How it works
 
+```text
+ session start                    during the session                  session end
+ ─────────────                    ──────────────────                  ───────────
+ hook ─► fieldcraft query ─► relevant lessons in context ─► agent cites lesson:<id> as it works
+                                                                              │
+    per-lesson confidence ◄── confirmed / contradicted / ignored ◄── hook reads transcript + git diff
+              │
+    scheduled: archive the unused, restore what matches again, merge twins, draft derived lessons
+```
+
 1. **Session start.** A hook reminds the agent to run `fieldcraft query "<what you are about to do>"`.
    Retrieval fuses exact dense-vector search, BM25 and project-identity cues, then ranks by file
    overlap, task overlap, phase, recency and confidence, and returns a token-budgeted set of
@@ -56,12 +66,9 @@ behaves the same way. Details: [ARCHITECTURE.md](ARCHITECTURE.md).
   outcome signal has not been audited yet.
 - **Experimental:** the dream consolidation pass (built and provenance-gated; output quality not yet
   measured) and the background distiller.
-- **Evaluation, honestly:** the only end-to-end measurement is a 19-task SWE-bench Verified study
-  (pytest) with idealized, hand-written lessons placed in the prompt: about 19% fewer agent steps
-  (95% CI −6.6 to −0.5 steps); the changes in resolution rate and tokens were not statistically
-  significant. Other retrieval checks are small or partly synthetic. We do not claim a benchmark
-  improvement yet; a reproducible benchmark on the real product path is the next milestone. See
-  [eval/README.md](eval/README.md) and [ROADMAP.md](ROADMAP.md).
+- **No performance claims.** The outcome loop is instrumented and running; whether it makes agents
+  measurably better is not something we assert yet. See [ROADMAP.md](ROADMAP.md) for what would
+  change that.
 
 ## Quick start
 
@@ -179,7 +186,6 @@ The installed instructions ask agents to:
 | Understand retrieval, scoring and the feedback loop | [ARCHITECTURE.md](ARCHITECTURE.md) |
 | See what is shipped, gated or planned | [ROADMAP.md](ROADMAP.md) |
 | Deploy, restart or debug the server | [docs/OPERATIONS.md](docs/OPERATIONS.md) |
-| Read the evaluation evidence | [eval/README.md](eval/README.md) |
 | Read what changed and why | [change_history/](change_history/) |
 | Report a vulnerability | [SECURITY.md](SECURITY.md) |
 
@@ -191,8 +197,7 @@ cargo test --workspace
 cargo clippy --workspace -- -D warnings
 ```
 
-The tests run offline and need no API keys. Changes to retrieval or scoring should come with
-evidence; see [CONTRIBUTING.md](CONTRIBUTING.md).
+The tests run offline and need no API keys. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 

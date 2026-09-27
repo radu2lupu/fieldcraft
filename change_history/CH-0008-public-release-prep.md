@@ -42,6 +42,10 @@ Date: 2026-09-27
   `reindex-watchdog.sh` (kill and relaunch on stall) remains the workaround.
 - **Workflows.** `@claude` responds only to owners, members and collaborators; the review workflow
   skips fork PRs.
+- **Repo cleanup.** Removed the April-era result files, the skill-intelligence research docs, and
+  the Python SWE-bench/skill eval scripts that referenced data no longer in the tree. Benchmark
+  numbers are gone from the top-level docs: Fieldcraft makes no performance claims; `eval/` holds two
+  experiment harnesses with dated write-ups. Added an issue template and repo topics.
 - **Docs.** Public README, `docs/COMPARISON.md` (vs other memory systems, cited),
   `docs/research/2026-09-public-launch-review.md` (technical review and evidence audit),
   `SECURITY.md`, a "Public launch track" in ROADMAP, and overclaim fixes (exact cosine not ANN,
