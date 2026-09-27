@@ -4,7 +4,7 @@
 Lessons from past sessions, retrieved on cue, graded by what happened next.
 
 [![CI](https://github.com/radu2lupu/fieldcraft/actions/workflows/ci.yml/badge.svg)](https://github.com/radu2lupu/fieldcraft/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License: PolyForm Noncommercial](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-blue.svg)](LICENSE)
 
 Fieldcraft turns finished Claude Code, Codex and Grok sessions into typed lessons (claims,
 procedures, directives, project context, episodes) and gives the relevant ones to the next session
@@ -196,4 +196,6 @@ evidence; see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+[PolyForm Noncommercial 1.0.0](LICENSE). Free to use, modify and share for personal, research,
+educational and nonprofit purposes. Commercial use requires a separate license: open an issue or
+contact the author.

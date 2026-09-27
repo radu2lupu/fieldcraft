@@ -62,3 +62,9 @@ PRs that change retrieval behavior without benchmark numbers will be asked to ad
 4. Open a PR with a clear description of what changed and why
 
 For larger changes, open an issue first to align on approach.
+
+## Licensing of contributions
+
+The project is licensed under the PolyForm Noncommercial License 1.0.0. By submitting a
+contribution you agree that it is licensed under the same terms and that the maintainer may
+also license it, including commercially, as part of Fieldcraft.
