@@ -1,0 +1,37 @@
+[package]
+name = "fieldcraft-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "fieldcraft-server"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+axum.workspace = true
+hex.workspace = true
+chrono.workspace = true
+rand.workspace = true
+reqwest.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tower.workspace = true
+tower_governor.workspace = true
+tower-http.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+fieldcraft-core = { path = "../fieldcraft-core" }
+fieldcraft-storage = { path = "../fieldcraft-storage" }
+fieldcraft-retrieval = { path = "../fieldcraft-retrieval" }
+clap = { workspace = true }
+walkdir.workspace = true
+
+[dev-dependencies]
+reqwest.workspace = true
+tempfile.workspace = true

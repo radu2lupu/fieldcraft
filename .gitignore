@@ -1,0 +1,64 @@
+.DS_Store
+node_modules/
+__pycache__/
+**/__pycache__/
+*.pyc
+target/
+fixtures/**/target/
+
+# Local caches + scratch
+.fastembed_cache/
+crates/fieldcraft-server/.fastembed_cache/
+.grepai/
+.venv-bench/
+.cache/
+.omx/
+.omc/
+.claude/*
+!.claude/settings.json
+
+# Benchmarks/research data (cloned external repos and generated artifacts)
+benchmarks/*
+/research/
+
+# Log output
+logs/
+
+# Root-level benchmark report artifacts (one JSON per eval run)
+codex-*.json
+claude-*.json
+claude-sonnet-*.json
+gpt-*.json
+
+# Ad-hoc test/debug outputs
+/tmp_*
+
+# Per-experiment SWE-Bench-CL pilot scratch scripts (each run has its own seed/config)
+scripts/gen120_*
+scripts/swe_cl_eval_30.sh
+scripts/contextbench_codex_eval.py
+scripts/local_swe_eval.py
+scripts/prompt_eval.py
+scripts/swecl_compare.py
+scripts/v3iso_eval.sh
+scripts/v5_eval_serial.sh
+
+# Local eval scratch and pre-registration docs
+.local-eval/
+docs/swe-bench-cl-preregister-v5.md
+
+# Swebench harness per-run report files (written to repo root)
+local_eval.*.json
+
+# SQLite WAL/SHM temp files
+*.sqlite3-shm
+*.sqlite3-wal
+
+# Owner-local notes with private hostnames (never commit)
+*.local.md
+
+# Skill-intelligence research data (private/third-party content; archived pre-public)
+eval/oracle_validation_v1/
+eval/skills/
+eval/patch_planning/
+eval/retrieval_usefulness/*/*_trace.json

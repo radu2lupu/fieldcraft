@@ -1,0 +1,5 @@
+{
+  "event": "SessionStart",
+  "command": "FIELDCRAFT_HOOKS/session-start-query.sh",
+  "purpose": "On session start, remind the agent to query fieldcraft before doing anything else."
+}

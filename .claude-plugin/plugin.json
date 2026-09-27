@@ -1,0 +1,7 @@
+{
+  "name": "fieldcraft",
+  "description": "Local agent learning for Claude Code. Distills completed sessions into reusable decisions, procedures, fixes, and project lessons so future sessions start with field-tested context. Supports multi-machine sharing via a self-hosted HTTP server.",
+  "author": {
+    "name": "Radu Lupu"
+  }
+}

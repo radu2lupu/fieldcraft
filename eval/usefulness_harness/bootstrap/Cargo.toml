@@ -1,0 +1,21 @@
+[workspace]
+# Empty table: tells Cargo this is its OWN workspace root, so it does NOT get pulled into
+# the root fieldcraft Cargo.toml workspace (we must not touch crates/* or root Cargo.toml).
+
+[package]
+name = "usefulness-bootstrap"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Standalone Cargo project, deliberately NOT a member of the root workspace
+# (eval/usefulness_harness must not touch crates/* or the root Cargo.toml).
+# Build with: cargo build --release --manifest-path eval/usefulness_harness/bootstrap/Cargo.toml
+
+[[bin]]
+name = "usefulness-bootstrap"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

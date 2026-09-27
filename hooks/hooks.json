@@ -1,0 +1,26 @@
+{
+  "description": "Fieldcraft: local agent learning for Claude Code and Codex",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-start-query.sh",
+            "statusMessage": "Loading session lessons..."
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-summary-reminder.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "event": "Stop",
+  "command": "FIELDCRAFT_HOOKS/stop-feedback.sh",
+  "purpose": "Non-blocking session-end marker + trace-analyze. LLM distill is friction-gated (quiet sessions skip)."
+}

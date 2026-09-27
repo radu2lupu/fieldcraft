@@ -1,0 +1,44 @@
+[package]
+name = "fieldcraft-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "fieldcraft"
+path = "src/main.rs"
+
+[lib]
+name = "fieldcraft_cli"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+chrono.workspace = true
+clap.workspace = true
+keyring.workspace = true
+regex.workspace = true
+reqwest.workspace = true
+rpassword = "7"
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
+walkdir.workspace = true
+fieldcraft-core = { path = "../fieldcraft-core" }
+fieldcraft-extract = { path = "../fieldcraft-extract" }
+fieldcraft-retrieval = { path = "../fieldcraft-retrieval" }
+fieldcraft-storage = { path = "../fieldcraft-storage" }
+
+[dev-dependencies]
+chrono.workspace = true
+rusqlite.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+fieldcraft-extract = { path = "../fieldcraft-extract", features = ["test-utils"] }
+fieldcraft-storage = { path = "../fieldcraft-storage" }
+fieldcraft-core = { path = "../fieldcraft-core" }

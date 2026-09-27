@@ -1,0 +1,31 @@
+#!/bin/bash
+# Stop hook — blocks session end until Claude writes a lesson summary.
+# Activates for any git repo automatically. Project name is derived from git remote
+# origin (deterministic across machines) or falls back to directory name.
+INPUT=$(cat)
+
+# Prevent infinite loop — if we already triggered a stop hook continuation, let it end
+if [ "$(echo "$INPUT" | jq -r '.stop_hook_active // false')" = "true" ]; then
+  exit 0
+fi
+
+# Get cwd from hook input (more reliable than $PWD in hook context)
+CWD=$(echo "$INPUT" | jq -r '.cwd // empty')
+CWD="${CWD:-$PWD}"
+
+# Ensure common global bin paths are on PATH
+for p in "$HOME/.bun/bin" "/opt/homebrew/bin" "/usr/local/bin"; do
+  [ -d "$p" ] && export PATH="$p:$PATH"
+done
+
+CLI="${CLAUDE_PLUGIN_ROOT}/scripts/fieldcraft"
+
+# Must have the CLI available
+if [ ! -x "$CLI" ] && ! command -v fieldcraft >/dev/null 2>&1; then
+  exit 0
+fi
+
+jq -n --arg cli "$CLI" '{
+  "decision": "block",
+  "reason": ("BEFORE STOPPING: You must persist what you learned this session. Run:\n`" + $cli + " write \"<concise summary: what changed, why, and what was learned>\"`\nKeep it short and structured: ideally one sentence, under ~200 characters, and not a transcript dump.\nThen you may stop. If this session was truly trivial (only reading files, no changes, no decisions), you may skip this — but explain why.")
+}'

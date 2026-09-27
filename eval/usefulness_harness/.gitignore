@@ -1,0 +1,8 @@
+# Heavy or regenerable run artifacts — never commit these.
+work/
+results/
+tasks/
+bootstrap/target/
+venvs/
+*.venv/
+__pycache__/
