@@ -42,6 +42,9 @@ Date: 2026-09-27
   `reindex-watchdog.sh` (kill and relaunch on stall) remains the workaround.
 - **Workflows.** `@claude` responds only to owners, members and collaborators; the review workflow
   skips fork PRs.
+- **Jev experiment, extended.** Four framings, blended scoring with bootstrap CI and a split-half check,
+  a public-landscape survey, and the conclusion that a judgment model helps only as an extra signal
+  (`eval/jev_rerank/`).
 - **Repo cleanup.** Removed the April-era result files, the skill-intelligence research docs, and
   the Python SWE-bench/skill eval scripts that referenced data no longer in the tree. Benchmark
   numbers are gone from the top-level docs: Fieldcraft makes no performance claims; `eval/` holds two

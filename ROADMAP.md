@@ -87,10 +87,11 @@ Done items are marked; the rest are ordered by priority within each group.
       changes in CI.
 - [ ] Compute the North Star (session lift) in `fieldcraft stats`.
 - [ ] Wire `citation_match.rs` as a second confirm source for paraphrased use.
-- [x] ~~LLM/judgment-model reranker over the served list~~ — tested with TypeSafe Jev on 865 logged
-      queries (2026-09-27): ranks cited lessons lower than the current order in both framings
-      (`eval/jev_rerank/README.md`). Judgment models remain a candidate for outcome attribution
-      and dream-output checks, not ranking.
+- [x] Judgment-model reranker, tested with TypeSafe Jev on 865 logged queries (2026-09-27,
+      `eval/jev_rerank/README.md`): on its own it ranks cited lessons lower than the current order in
+      all four framings; blended into the served order it adds +2–3 points hit@1 and MRR (CI excludes
+      zero, holds on a held-out half). Optional blended feature is the only worthwhile follow-up;
+      public evidence says post-hoc "was this memory used?" judgments are its weak spot.
 - [ ] Dream review queue with measured acceptance rate.
 
 ### Longer term
