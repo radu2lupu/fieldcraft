@@ -285,13 +285,13 @@ case "$distiller" in
     ;;
   claude)
     (
+      # Prompt goes first: --add-dir is variadic and would swallow a trailing prompt.
       claude \
-        --print \
+        --print "$PROMPT" \
         --dangerously-skip-permissions \
         --no-session-persistence \
-        --max-budget-usd 0.10 \
-        --add-dir "$CWD" \
-        "$PROMPT" &
+        --max-budget-usd "${FIELDCRAFT_DISTILL_BUDGET_USD:-0.30}" \
+        --add-dir "$CWD" &
       cmd_pid=$!
       (
         sleep "$DISTILL_TIMEOUT"
