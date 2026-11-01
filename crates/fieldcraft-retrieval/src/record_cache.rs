@@ -33,6 +33,8 @@ pub(crate) struct CachedRecord {
     pub project_id: String,
     pub has_identity_cue: bool,
     pub vector: Option<Vec<f32>>,
+    /// Lowercased title and retrieval text (`fieldcraft_storage::record_haystack`).
+    pub haystack: String,
 }
 
 #[derive(Debug, Default)]
@@ -70,6 +72,7 @@ impl RecordCache {
                 project_id: row.project_id,
                 has_identity_cue: row.has_identity_cue,
                 vector: row.vector,
+                haystack: row.haystack,
             },
         );
     }
@@ -129,6 +132,27 @@ impl RecordCache {
 
     fn is_current(&self, max_seq: i64) -> bool {
         self.loaded && self.last_seq == max_seq
+    }
+
+    /// Records without any identity cue, as `(id, project_id)` in scan order,
+    /// for legacy identity admission (see `identity_cue_search`).
+    pub fn legacy_identity_candidates(&self, tier: &str) -> Vec<(String, String)> {
+        self.iter()
+            .filter(|entry| !entry.has_identity_cue)
+            .filter(|entry| entry.tier.as_deref().is_none_or(|t| t == tier))
+            .map(|entry| (entry.id.clone(), entry.project_id.clone()))
+            .collect()
+    }
+
+    /// The cached `record_haystack` of `id` when the record can be served from
+    /// `tier` (the cache holds exactly the active and provisional records).
+    pub fn admissible_haystack(&self, id: &str, tier: &str) -> Option<&str> {
+        let entry = self.entries.get(self.key_of.get(id)?)?;
+        entry
+            .tier
+            .as_deref()
+            .is_none_or(|t| t == tier)
+            .then_some(entry.haystack.as_str())
     }
 
     /// Entries in the old scan order.
@@ -191,22 +215,6 @@ pub(crate) fn with_record_cache<R>(
     }
     let cache = shared.read().unwrap_or_else(|e| e.into_inner());
     Ok(f(&cache))
-}
-
-/// Records without any identity cue, as `(id, project_id)` in scan order,
-/// for legacy identity admission (see `identity_cue_search`).
-pub(crate) fn legacy_identity_candidates(
-    repo: &KnowledgeRepository,
-    tier: &str,
-) -> Result<Vec<(String, String)>, TrError> {
-    with_record_cache(repo, |cache| {
-        cache
-            .iter()
-            .filter(|entry| !entry.has_identity_cue)
-            .filter(|entry| entry.tier.as_deref().is_none_or(|t| t == tier))
-            .map(|entry| (entry.id.clone(), entry.project_id.clone()))
-            .collect()
-    })
 }
 
 /// Archived (plain, not superseded) records whose vector is at least
@@ -367,5 +375,32 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+    #[test]
+    fn haystack_follows_text_updates_and_tier() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("memory.sqlite3");
+        let writer = KnowledgeRepository::open(&path).unwrap();
+        let reader = KnowledgeRepository::open_reader(&path).unwrap();
+        writer.insert_knowledge(&record("h")).unwrap();
+        let hay = |tier: &str| {
+            with_record_cache(&reader, |c| {
+                c.admissible_haystack("h", tier).map(str::to_string)
+            })
+            .unwrap()
+        };
+        assert_eq!(hay("active").as_deref(), Some("title h text h"));
+        assert_eq!(hay("archive"), None, "wrong tier is not admissible");
+        writer
+            .connection()
+            .execute(
+                "UPDATE knowledge SET title = 'New Title', retrieval_text = 'More TEXT' WHERE id = 'h'",
+                [],
+            )
+            .unwrap();
+        assert_eq!(hay("active").as_deref(), Some("new title more text"));
+        writer.archive_record("h", "test").unwrap();
+        assert_eq!(hay("active"), None);
+        assert_eq!(hay("archive").as_deref(), Some("new title more text"));
     }
 }

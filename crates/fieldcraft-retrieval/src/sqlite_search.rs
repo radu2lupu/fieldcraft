@@ -243,14 +243,19 @@ pub(crate) fn identity_search_unscoped(
     source_filter: SourceFilter,
 ) -> Result<Vec<SqliteHit>, TrError> {
     let terms = query_terms(query);
-    let legacy = if identity_cues.is_empty() || terms.is_empty() {
-        Vec::new()
-    } else {
-        crate::record_cache::legacy_identity_candidates(repo, tier)?
-    };
-    let ranked = repo
-        .identity_cue_search(identity_cues, &terms, limit, tier, &legacy)
-        .map_err(|e| internal(format!("identity_cue_search: {e}")))?;
+    // Legacy candidates and every candidate's lowercased text come from the
+    // record cache, so the identity query reads only ids and identity values.
+    let ranked = crate::record_cache::with_record_cache(repo, |cache| {
+        let legacy = if identity_cues.is_empty() || terms.is_empty() {
+            Vec::new()
+        } else {
+            cache.legacy_identity_candidates(tier)
+        };
+        repo.identity_cue_search(identity_cues, &terms, limit, &legacy, &|id| {
+            cache.admissible_haystack(id, tier)
+        })
+    })?
+    .map_err(|e| internal(format!("identity_cue_search: {e}")))?;
     let ids: Vec<String> = ranked.iter().map(|(id, _)| id.clone()).collect();
     let records = repo
         .get_knowledge_batch(&ids)

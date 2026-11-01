@@ -37,8 +37,9 @@ END;
 CREATE TRIGGER IF NOT EXISTS knowledge_vector_change_delete AFTER DELETE ON knowledge BEGIN
     INSERT INTO knowledge_vector_changes(knowledge_id) VALUES (old.id);
 END;
-CREATE TRIGGER IF NOT EXISTS knowledge_vector_change_update
-AFTER UPDATE OF id, tier, state, superseded_by, source_json, project_id
+DROP TRIGGER IF EXISTS knowledge_vector_change_update;
+CREATE TRIGGER IF NOT EXISTS knowledge_record_change_update
+AFTER UPDATE OF id, tier, state, superseded_by, source_json, project_id, title, retrieval_text
 ON knowledge BEGIN
     INSERT INTO knowledge_vector_changes(knowledge_id) VALUES (old.id);
     INSERT INTO knowledge_vector_changes(knowledge_id)
@@ -77,6 +78,14 @@ pub struct RecordIndexRow {
     pub project_id: String,
     pub has_identity_cue: bool,
     pub vector: Option<Vec<f32>>,
+    /// [`record_haystack`] of the record's title and retrieval text.
+    pub haystack: String,
+}
+
+/// `"{title} {retrieval_text}"` lowercased: what identity admission matches
+/// query terms against. One owner, so the cache and the SQLite fallback agree.
+pub fn record_haystack(title: &str, retrieval_text: &str) -> String {
+    format!("{} {}", title.to_lowercase(), retrieval_text.to_lowercase())
 }
 
 /// The display/scoring fields of a dense-search hit.
@@ -109,6 +118,7 @@ fn index_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RecordIndexRow> {
         project_id: row.get(6)?,
         has_identity_cue: row.get(7)?,
         vector: blob.map(|bytes| blob_to_vector(&bytes)),
+        haystack: record_haystack(&row.get::<_, String>(9)?, &row.get::<_, String>(10)?),
     })
 }
 
@@ -125,7 +135,7 @@ impl KnowledgeRepository {
         format!(
             "k.rowid, k.id, k.state, k.tier, k.superseded_by IS NULL, k.source_json, k.project_id,
              EXISTS (SELECT 1 FROM cue_index c WHERE c.record_id = k.id AND c.dim_name = 'identity'),
-             {}",
+             {}, k.title, k.retrieval_text",
             self.vector_sql("k.id")
         )
     }
@@ -134,6 +144,7 @@ impl KnowledgeRepository {
     /// never takes a write lock. The catalog must already have been opened
     /// once with [`KnowledgeRepository::open`] (the server does that at start).
     pub fn open_reader(path: &Path) -> Result<Self, TrError> {
+        crate::schema::configure_sqlite();
         let conn = Connection::open(path).map_err(sqlite_error)?;
         conn.execute_batch("PRAGMA busy_timeout=5000; PRAGMA query_only=1;")
             .map_err(sqlite_error)?;
@@ -237,31 +248,6 @@ impl KnowledgeRepository {
                 .map_err(sqlite_error)?;
             for row in rows {
                 out.push(row.map_err(sqlite_error)?);
-            }
-        }
-        Ok(out)
-    }
-
-    /// `(title, retrieval_text)` for `ids`, keyed by id.
-    pub fn load_titles_and_texts(
-        &self,
-        ids: &[String],
-    ) -> Result<HashMap<String, (String, String)>, TrError> {
-        let mut out = HashMap::with_capacity(ids.len());
-        for chunk in ids.chunks(500) {
-            let sql = format!(
-                "SELECT id, title, retrieval_text FROM knowledge WHERE id IN ({})",
-                id_placeholders(chunk.len())
-            );
-            let mut stmt = self.connection().prepare(&sql).map_err(sqlite_error)?;
-            let rows = stmt
-                .query_map(rusqlite::params_from_iter(chunk.iter()), |row| {
-                    Ok((row.get::<_, String>(0)?, (row.get(1)?, row.get(2)?)))
-                })
-                .map_err(sqlite_error)?;
-            for row in rows {
-                let (id, pair) = row.map_err(sqlite_error)?;
-                out.insert(id, pair);
             }
         }
         Ok(out)

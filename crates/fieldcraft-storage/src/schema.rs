@@ -61,7 +61,30 @@ where
 /// Open (or create) the unified DAM catalog at the given path.
 /// Creates the directory and all tables if they don't already exist.
 /// Applies WAL mode and busy_timeout=5000 on every open.
+/// Turn off SQLite's memory statistics before the first connection opens.
+///
+/// With statistics on, every allocation inside SQLite takes one process-wide
+/// mutex. The query path runs many reader connections in parallel and its
+/// identity predicates (`lower`, `replace`, `LIKE`) allocate per row, so with
+/// 8 concurrent queries that mutex was where the server spent its time.
+/// Fieldcraft never reads SQLite's memory statistics. A no-op once SQLite is
+/// initialized (the first open wins); safe to call from every open path.
+pub(crate) fn configure_sqlite() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        // SAFETY: sqlite3_config must run before sqlite3_initialize; it only
+        // returns SQLITE_MISUSE (ignored) when called later.
+        unsafe {
+            rusqlite::ffi::sqlite3_config(
+                rusqlite::ffi::SQLITE_CONFIG_MEMSTATUS,
+                0 as std::os::raw::c_int,
+            );
+        }
+    });
+}
+
 pub fn open_catalog(path: &Path) -> Result<Connection, TrError> {
+    configure_sqlite();
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| TrError::Storage {
             message: e.to_string(),

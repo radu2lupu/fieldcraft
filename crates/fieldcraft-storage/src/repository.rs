@@ -2402,13 +2402,17 @@ impl KnowledgeRepository {
         rows.collect::<Result<Vec<_>, _>>().map_err(sqlite_error)
     }
 
-    pub fn identity_cue_search(
+    /// `haystack_of(id)` is the record's `record_haystack` when the record is
+    /// admissible (state active or provisional, in the requested tier) and `None`
+    /// otherwise; the record cache answers it from memory, so the identity
+    /// query never touches `knowledge` rows.
+    pub fn identity_cue_search<'h>(
         &self,
         cues: &[String],
         query_terms: &[String],
         limit: usize,
-        tier: &str,
         legacy_candidates: &[(String, String)],
+        haystack_of: &dyn Fn(&str) -> Option<&'h str>,
     ) -> Result<Vec<(String, f64)>, TrError> {
         if cues.is_empty() || query_terms.is_empty() {
             return Ok(vec![]);
@@ -2436,7 +2440,7 @@ impl KnowledgeRepository {
             .into_iter()
             .collect();
 
-        let identity_expr = "replace(replace(lower(c.dim_value), '_', ''), '-', '')";
+        let identity_expr = "replace(replace(lower(d.v), '_', ''), '-', '')";
         let identity_predicates = normalized_cues
             .iter()
             .map(|_| {
@@ -2447,13 +2451,18 @@ impl KnowledgeRepository {
             .collect::<Vec<_>>()
             .join(" OR ");
         let sql = format!(
-            "SELECT DISTINCT k.id, c.dim_value, k.title, k.retrieval_text
-             FROM cue_index c
-             JOIN knowledge k ON k.id = c.record_id
-             WHERE c.dim_name = 'identity'
-               AND ({identity_predicates})
-               AND k.state IN ('active', 'provisional')
-               AND (k.tier = ? OR k.tier IS NULL)"
+            // The predicates run once per distinct identity value (~3k on the
+            // 2026-11 store), not once per cue row (~57k): each evaluation
+            // allocates strings, and under concurrent queries SQLite's
+            // allocator lock made the per-row form the server's bottleneck.
+            "WITH matched AS (
+               SELECT d.v FROM (SELECT DISTINCT dim_value AS v FROM cue_index
+                                WHERE dim_name = 'identity') d
+               WHERE {identity_predicates}
+             )
+             SELECT DISTINCT c.record_id, c.dim_value
+             FROM matched m
+             JOIN cue_index c ON c.dim_name = 'identity' AND c.dim_value = m.v"
         );
         let fuzzy_globs: Vec<String> = normalized_cues
             .iter()
@@ -2471,7 +2480,6 @@ impl KnowledgeRepository {
             cue_params.push(cue);
             cue_params.push(fuzzy_glob);
         }
-        cue_params.push(&tier);
 
         // A record matches through several identity rows (aliases); it scores by
         // its best row, independent of the order rows come back in.
@@ -2479,16 +2487,11 @@ impl KnowledgeRepository {
         let mut stmt = self.conn.prepare(&sql).map_err(sqlite_error)?;
         let rows = stmt
             .query_map(rusqlite::params_from_iter(cue_params), |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                ))
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
             })
             .map_err(sqlite_error)?;
         for row in rows {
-            let (id, identity_value, title, retrieval_text) = row.map_err(sqlite_error)?;
+            let (id, identity_value) = row.map_err(sqlite_error)?;
             let identity_norm = fieldcraft_core::cue_extract::normalize_identity(&identity_value);
             let identity_score = normalized_cues
                 .iter()
@@ -2498,7 +2501,9 @@ impl KnowledgeRepository {
                 continue;
             }
 
-            let haystack = format!("{} {}", title.to_lowercase(), retrieval_text.to_lowercase());
+            let Some(haystack) = haystack_of(&id) else {
+                continue;
+            };
             let overlap = normalized_query_terms
                 .iter()
                 .filter(|(term, normalized)| {
@@ -2542,14 +2547,11 @@ impl KnowledgeRepository {
             seen.insert(id.clone());
             admitted.push((id.as_str(), project_id.as_str()));
         }
-        let admitted_ids: Vec<String> = admitted.iter().map(|(id, _)| id.to_string()).collect();
-        let texts = self.load_titles_and_texts(&admitted_ids)?;
         for (id, project_id) in admitted {
-            let Some((title, retrieval_text)) = texts.get(id) else {
+            let Some(haystack) = haystack_of(id) else {
                 continue;
             };
             let (identity_norm, identity_score) = &project_scores[project_id];
-            let haystack = format!("{} {}", title.to_lowercase(), retrieval_text.to_lowercase());
             let overlap = normalized_query_terms
                 .iter()
                 .filter(|(term, normalized)| {
@@ -3893,6 +3895,30 @@ mod tests {
         assert_eq!(results_b[0].0, "fp-2");
     }
 
+    /// `record_haystack` of every record admissible in `tier` (production reads
+    /// these from the record cache).
+    fn admissible_haystacks(repo: &KnowledgeRepository, tier: &str) -> HashMap<String, String> {
+        let mut stmt = repo
+            .connection()
+            .prepare(
+                "SELECT id, title, retrieval_text FROM knowledge
+                 WHERE state IN ('active', 'provisional') AND (tier = ?1 OR tier IS NULL)",
+            )
+            .unwrap();
+        stmt.query_map([tier], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                crate::record_index::record_haystack(
+                    &row.get::<_, String>(1)?,
+                    &row.get::<_, String>(2)?,
+                ),
+            ))
+        })
+        .unwrap()
+        .map(Result::unwrap)
+        .collect()
+    }
+
     /// The legacy identity candidates as the old full scan selected them
     /// (production gets them from the record cache).
     fn legacy_identity_candidates(repo: &KnowledgeRepository, tier: &str) -> Vec<(String, String)> {
@@ -3929,14 +3955,15 @@ mod tests {
             .execute("DELETE FROM cue_index WHERE dim_name = 'identity'", [])
             .unwrap();
         let candidates = legacy_identity_candidates(&repo, "active");
+        let haystacks = admissible_haystacks(&repo, "active");
         assert_eq!(candidates.len(), 2);
         let results = repo
             .identity_cue_search(
                 &["field_notes".to_string()],
                 &["budget".to_string()],
                 10,
-                "active",
                 &candidates,
+                &|id| haystacks.get(id).map(String::as_str),
             )
             .unwrap();
         assert_eq!(results, vec![("legacy-a".to_string(), 31.0)]);
@@ -3966,6 +3993,7 @@ mod tests {
             "Ingredient display strings appear in a different application.".to_string();
         repo.insert_knowledge(&other_project).unwrap();
 
+        let haystacks = admissible_haystacks(&repo, "active");
         let results = repo
             .identity_cue_search(
                 &["opotato".to_string()],
@@ -3976,8 +4004,8 @@ mod tests {
                     "surface".to_string(),
                 ],
                 10,
-                "active",
                 &legacy_identity_candidates(&repo, "active"),
+                &|id| haystacks.get(id).map(String::as_str),
             )
             .unwrap();
         let ids: Vec<&str> = results.iter().map(|(id, _)| id.as_str()).collect();
