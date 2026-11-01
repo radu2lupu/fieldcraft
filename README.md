@@ -76,9 +76,11 @@ Requirements today:
 
 - **macOS** (the installer registers a launchd service; Linux is on the roadmap)
 - Rust toolchain ([rustup](https://rustup.rs)), `jq`, and `python3` (used by the installer)
-- A **Google Gemini API key** for embeddings. Lesson text and queries are sent to the Gemini API;
-  the lesson store itself stays in a local SQLite file. Without a key, retrieval falls back to
-  keyword search and the vector-based maintenance does nothing.
+- An **embedding provider** (`FIELDCRAFT_EMBED_PROVIDER`): `gemini` (default today; needs a Google
+  Gemini API key, and lesson text and queries are sent to the Gemini API), `gemma` (EmbeddingGemma 2
+  on a local llama.cpp server; nothing leaves the machine; see [docs/OPERATIONS.md](docs/OPERATIONS.md)),
+  or `none` (keyword-only retrieval; vector-based maintenance does nothing). The mode is always
+  reported by `fieldcraft doctor` and the server's `/status`.
 - Optional: `codex`, `claude` or `grok` on your `PATH` for the background distiller
 
 ```bash
@@ -148,7 +150,7 @@ fieldcraft lifecycle [--apply]       Propose (or apply) reversible archival
 fieldcraft promote [--apply]         Preview (or write) a workhorse lesson as SKILL.md / AGENTS.md
 fieldcraft dream [--apply]           Cluster confirmed lessons and draft derived lessons
 fieldcraft ingest                    Ingest local Claude/Codex session logs
-fieldcraft reindex                   Rebuild embeddings for all records
+fieldcraft reindex [--provider P]     Build missing vectors for a provider (resumable; other providers kept)
 fieldcraft update                    Pull the repo and reinstall binaries and config
 ```
 
@@ -171,7 +173,8 @@ The installed instructions ask agents to:
 | Schema, tables, migrations | `crates/fieldcraft-storage/src/schema.rs` |
 | Write path, merge, lifecycle, outcome updates | `crates/fieldcraft-storage/src/repository.rs` |
 | Retrieval and scoring | `crates/fieldcraft-retrieval/src/retrieval.rs`, `cue_match.rs`, `sqlite_search.rs` |
-| Embeddings (Gemini) | `crates/fieldcraft-retrieval/src/lib.rs` |
+| Embedding providers and tags | `crates/fieldcraft-core/src/embedding.rs`, `crates/fieldcraft-retrieval/src/lib.rs`, `gemma.rs` |
+| Record cache (query-path scans) | `crates/fieldcraft-retrieval/src/record_cache.rs`, `crates/fieldcraft-storage/src/record_index.rs` |
 | Server, `trace-analyze`, `/stats`, auth | `crates/fieldcraft-server/src/lib.rs`, `auth.rs` |
 | CLI (all subcommands, HTTP client) | `crates/fieldcraft-cli/src/main.rs` |
 | Cue extraction | `crates/fieldcraft-core/src/cue_extract.rs` |

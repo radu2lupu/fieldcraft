@@ -156,6 +156,11 @@ Live on the reference shared-server deployment since 2026-07-01/02. Full design 
 | `FIELDCRAFT_ENROLL_SECRET` | unset | When set, `POST /enroll` requires it in `X-Fieldcraft-Enroll-Secret` from every caller. When unset, only loopback callers can enroll. Clients pass it via `install.sh --enroll-secret`. Existing tokens are unaffected. |
 | `FIELDCRAFT_ENROLL_OPEN` | unset | `1` allows unauthenticated enrollment from any address (pre-2026-09 behaviour). Fully trusted networks only. |
 | `FIELDCRAFT_SECRETS_FILE` | `<data_dir>/secrets.env` | Override the secrets file location. The environment always takes precedence over the file. |
+| `FIELDCRAFT_EMBED_PROVIDER` | `gemini` | `gemma` (local EmbeddingGemma 2 sidecar), `gemini`, or `none` (BM25-only). Read from the environment, else `secrets.env`. An invalid value stops the server at start. |
+| `FIELDCRAFT_EMBED_GEMMA_URL` | `http://127.0.0.1:7778` | The local `llama-server --embeddings` the gemma provider calls. |
+| `FIELDCRAFT_EMBED_GEMMA_MODEL` | `embeddinggemma-2-Q8_0` | Alias the sidecar must serve (`--alias`); part of the vector tag. |
+| `FIELDCRAFT_EMBED_GEMMA_MAX_CHARS` | `6000` | Character cap per text; longer texts are retried shorter. |
+| `FIELDCRAFT_EMBED_DIM` | `768` | Output dimensions (part of the vector tag). |
 | `FIELDCRAFT_EMBED_GEMINI_BASE_URL` | `https://generativelanguage.googleapis.com/v1beta` | Embedding API root, for a proxy or a test double. |
 | `FIELDCRAFT_PROMOTE_MIN_CONFIRMED` | `3` | Promote eligibility: minimum confirmed outcomes. |
 | `FIELDCRAFT_PROMOTE_MIN_CONFIRM_RATE` | `0.5` | Promote eligibility: minimum confirm / total rate. |
@@ -218,6 +223,37 @@ printf 'export GEMINI_API_KEY=%s\n' '<key>' >> ~/.fieldcraft/secrets.env && chmo
 Why: in September 2026 a reinstall rewrote the server plist with only `RUST_LOG`; the server ran
 for three weeks with no embedding key, every query silently fell back to BM25, ~4,000 new lessons
 got no vector, and merge, resurrection and dream did nothing. Nothing alerted.
+
+### Embeddings: provider, sidecar, switching models (history: CH-0012)
+
+The provider is `FIELDCRAFT_EMBED_PROVIDER` (table above). Put it in `~/.fieldcraft/secrets.env`
+rather than the launchd plist, for the same reason as the key: installers rewrite plists. Check
+the server's start-up line (`embeddings: ready`, `BM25-ONLY MODE`, or `EMBEDDINGS NOT READY`) and
+`fieldcraft doctor` (`server-embeddings`) after every change.
+
+**Local sidecar for `gemma`.** llama.cpp's `llama-server` (build b11476 or newer; b12032 tested)
+serving the text-only `embeddinggemma-2-Q8_0.gguf` from `ggml-org/embeddinggemma-2-GGUF`
+(309,855,456 bytes, sha256 `2188ac1deca4b77dffefd603c2776a9d76d9d74ec01841392982ebb840b09135`):
+
+```bash
+llama-server -m embeddinggemma-2-Q8_0.gguf --embeddings --alias embeddinggemma-2-Q8_0 \
+  --host 127.0.0.1 --port 7778 -c 8192 -np 4 -b 2048 -ub 2048
+```
+
+Run it under its own launchd job next to `com.fieldcraft.server`. Each slot holds 2,048 tokens;
+longer texts are shortened by the client. Resident memory measured on a Mac: about 500 MB with
+these settings.
+
+**Switching provider (old vectors are kept).** Vectors are stored per model tag, so:
+
+1. Start the sidecar. `fieldcraft reindex --provider gemma` on the server host (local catalog)
+   embeds every record missing a Gemma vector, serving records first, one short write transaction
+   per batch. Queries keep running on the current provider meanwhile; an interrupted run resumes.
+2. Set `FIELDCRAFT_EMBED_PROVIDER=gemma` and restart the server. Records written between steps 1
+   and 2 are embedded by running step 1 again.
+3. Rollback is the reverse: set the provider back and restart; the Gemini vectors are untouched.
+
+`/status` lists vectors per tag and how many serving records lack one under the configured tag.
 
 ### Enrolling a new client
 

@@ -29,7 +29,7 @@ Rust workspace, edition 2024. Six crates, all under `crates/`:
 |---|---|---|
 | `fieldcraft-core` | Shared domain types — `KnowledgeRecord`, payload structs, enums, `TrError` | `src/lib.rs` |
 | `fieldcraft-storage` | SQLite schema, repositories, session ingestion state | `src/schema.rs`, `src/lib.rs` |
-| `fieldcraft-retrieval` | Embeddings (Gemini `gemini-embedding-001` via HTTP), hybrid search, fusion, scoring, MMR | `src/retrieval.rs`, `src/sqlite_search.rs` |
+| `fieldcraft-retrieval` | Embedding providers (local EmbeddingGemma 2 sidecar or Gemini API), record cache, hybrid search, fusion, scoring, MMR | `src/lib.rs`, `src/gemma.rs`, `src/retrieval.rs`, `src/record_cache.rs`, `src/sqlite_search.rs` |
 | `fieldcraft-extract` | Transcript parsing, compression, LLM extraction (Stage A/B) | `src/lib.rs` |
 | `fieldcraft-cli` | CLI binary; HTTP client when `FIELDCRAFT_SERVER_URL` is set | `src/lib.rs` |
 | `fieldcraft-server` | HTTP server for multi-machine sharing (axum 0.8) | `src/lib.rs` |
@@ -130,7 +130,8 @@ Migrations are **idempotent** — `run_migration()` handles `duplicate column` e
 
 The schema has evolved by additive migration:
 
-- `knowledge.dense_vector BLOB` — dense embedding stored per record (Gemini `gemini-embedding-001`, 768-dim by default via `FIELDCRAFT_EMBED_DIM`; `fieldcraft reindex` rebuilds all vectors)
+- `knowledge.dense_vector BLOB` — the untagged Gemini vector of the record; since CH-0012 no longer read or written (copied once into `knowledge_vectors`, kept for rollback)
+- `knowledge_vectors(knowledge_id, tag, dims, vector)` — one dense vector per record and embedding model (CH-0012); `fieldcraft reindex --provider` fills a tag
 - `knowledge.schema_version INTEGER` — per-record schema marker (2/3/4)
 - `knowledge.phase TEXT` — phase classification (nullable for v2 records)
 - `knowledge.tier TEXT` — `active` | `archive`
@@ -163,7 +164,7 @@ RetrievalRequest{ project_id, context, files, task, preferred_types, tier }
 2. build_query_cue_bundle(request)   → typed identity cue + deterministic domain/tool/file/symbol cues
 3. detect_query_intent(request)      → ActionOriented | KnowledgeOriented | General
 4. weights_for_intent(intent)        → 12-feature weight vector, dynamic on intent
-5. embed_query(request)              → Gemini gemini-embedding-001, 768-dim vector (needs GEMINI_API_KEY); needs no repository, so the server runs it outside any lock
+5. embed_query(request)              → configured provider (gemma local or gemini), 768-dim QueryVector tagged with its model; BM25-only when provider is none or the call fails; needs no repository, so the server runs it outside any lock
 6. hybrid_search(repo, query, vec)   → unscoped dense (record cache) + unscoped FTS5 BM25 + cue_index identity admission (legacy rows from the record cache)
    ↓ RRF fusion
 7. compute_score per candidate       → weighted_sum of 12 features + weighted task grounding + cue-match adjustment
@@ -237,6 +238,26 @@ Default `DEFAULT_TOKEN_BUDGET = 60_000` (against `CONTEXT_WINDOW = 200_000`). `m
 - Episode: `"{trigger} | {outcome} | {first 2 observations}"`
 - Directive: `"{action} | {reason} | trigger: {trigger} | avoid: {avoid} | {retrieval_queries}"`
 - Context: `"{statement} | scope: {scope} | {implications} | {retrieval_queries}"`
+
+### Embedding providers and vector tags (history: CH-0012)
+
+`fieldcraft-core::embedding` owns which model makes the vectors. `FIELDCRAFT_EMBED_PROVIDER`
+(environment, else `secrets.env`) is `gemini` (default until the stage-4 quality gate in
+[docs/plans/local-embeddings-and-query-load.md](docs/plans/local-embeddings-and-query-load.md)
+passes), `gemma` (EmbeddingGemma 2, text-only Q8_0 GGUF, on a local `llama-server --embeddings`
+at `FIELDCRAFT_EMBED_GEMMA_URL`, default `http://127.0.0.1:7778`; no text leaves the machine), or
+`none` (BM25-only). Each vector is stored in `knowledge_vectors` under the tag
+`provider:model:dims` (for example `gemma:embeddinggemma-2-Q8_0:768`). A connection reads and
+writes its configured tag only; a query vector whose tag differs from the store's runs BM25-only.
+So vectors of two models are never compared, and switching models is: `fieldcraft reindex
+--provider <new>` (old vectors stay), then switch the provider. Gemma prompts follow the model
+card (`task: search result | query: …` for queries, `title: none | text: …` for documents); the
+client checks the sidecar's `/v1/models` alias before its first request. Cosine thresholds (merge,
+near-twin, dream, resurrection) are per tag (`CosineThresholds`).
+
+BM25-only is stated, never silent: the server logs it at start-up, `/status` carries an
+`embedding` block (provider, tag, `mode` dense or bm25-only, `ready`, `problem`, vectors per tag,
+serving records missing a vector, call health), and `fieldcraft doctor` reports it.
 
 ---
 

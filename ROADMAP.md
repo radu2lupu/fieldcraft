@@ -62,8 +62,9 @@ Done items are marked; the rest are ordered by priority within each group.
 - [ ] Distiller default: `codex exec --dangerously-bypass-approvals-and-sandbox` runs on transcript
       text, which is a prompt-injection surface. Default new installs to `none` or a read-only sandbox
       and make the bypass opt-in.
-- [ ] Embedding dependency: add a preflight / `fieldcraft doctor` line and either a local embedding
-      option or an explicit BM25-only mode, instead of silently degrading.
+- [x] Embedding dependency: add a preflight / `fieldcraft doctor` line and either a local embedding
+      option or an explicit BM25-only mode, instead of silently degrading (CH-0012: local
+      EmbeddingGemma 2 provider, `FIELDCRAFT_EMBED_PROVIDER=none`, `/status` embedding block).
 - [ ] Linux install path (systemd user unit or plain local mode); stop requiring `python3`.
 - [x] Interactive onboarding: `fieldcraft setup` (detect agents, local vs join-a-server, embedding
       key into `secrets.env`, distiller choice, hooks, then a round-trip check) and a
@@ -98,7 +99,7 @@ Done items are marked; the rest are ordered by priority within each group.
 
 - [x] Move the Gemini call out from under the repository mutex; cache vectors in memory (CH-0011:
       read-connection pool, trigger-invalidated record cache; RRF ties made deterministic).
-- Pluggable embedding providers with model tagging.
+- [x] Pluggable embedding providers with model tagging (CH-0012).
 - LLM cue classifier for phase / user_state.
 - Trim the public CLI surface; split the 6k-line `main.rs`.
 
