@@ -86,9 +86,19 @@ pub const GEMINI_THRESHOLDS: CosineThresholds = CosineThresholds {
     resurrection_min: 0.85,
 };
 
-/// Placeholder: the Gemini values, until the stage-4 calibration on the
-/// production copy replaces them (docs/plans/local-embeddings-and-query-load.md).
-pub const GEMMA_THRESHOLDS: CosineThresholds = GEMINI_THRESHOLDS;
+/// Calibrated 2026-11-01 on a copy of the production store by quantile matching
+/// (`fieldcraft-retrieval/examples/calibrate_cosine.rs`, 2,000 sampled records x
+/// 26,681 others): each Gemini threshold maps to the Gemma cosine that admits the
+/// same share of pairs (0.92 -> 0.936, 89% of pairs shared; 0.85 -> 0.874, 72%;
+/// 0.80 -> 0.833, 62%). Merged duplicates measure p10 0.895 / p50 0.952 under
+/// Gemma; a record's own text as a query measures p10 0.962 against it, so the
+/// resurrection threshold keeps a wide margin.
+pub const GEMMA_THRESHOLDS: CosineThresholds = CosineThresholds {
+    duplicate_min: 0.935,
+    near_twin_min: 0.875,
+    dream_min: 0.835,
+    resurrection_min: 0.875,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EmbeddingSpec {
@@ -247,5 +257,10 @@ mod tests {
             thresholds_for_tag(Some("gemma:embeddinggemma-2-Q8_0:768")),
             GEMMA_THRESHOLDS
         );
+        const {
+            assert!(GEMMA_THRESHOLDS.duplicate_min > GEMINI_THRESHOLDS.duplicate_min);
+            assert!(GEMMA_THRESHOLDS.dream_min < GEMMA_THRESHOLDS.near_twin_min);
+            assert!(GEMMA_THRESHOLDS.near_twin_min < GEMMA_THRESHOLDS.duplicate_min);
+        }
     }
 }

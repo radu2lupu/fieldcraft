@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Local EmbeddingGemma 2 sidecar for FIELDCRAFT_EMBED_PROVIDER=gemma (see docs/OPERATIONS.md).
+  Replace __HOME__ with the user's home directory, copy to ~/Library/LaunchAgents/, then
+  launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.fieldcraft.embedder.plist
+  Expects ~/.fieldcraft/embedder/llama-server (llama.cpp b11476 or newer) and
+  ~/.fieldcraft/embedder/embeddinggemma-2-Q8_0.gguf (sha256 2188ac1d...09135).
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.fieldcraft.embedder</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__HOME__/.fieldcraft/embedder/llama-server</string>
+    <string>-m</string>
+    <string>__HOME__/.fieldcraft/embedder/embeddinggemma-2-Q8_0.gguf</string>
+    <string>--embeddings</string>
+    <string>--alias</string>
+    <string>embeddinggemma-2-Q8_0</string>
+    <string>--host</string>
+    <string>127.0.0.1</string>
+    <string>--port</string>
+    <string>7778</string>
+    <string>-c</string>
+    <string>8192</string>
+    <string>-np</string>
+    <string>4</string>
+    <string>-b</string>
+    <string>2048</string>
+    <string>-ub</string>
+    <string>2048</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>__HOME__/.fieldcraft/embedder</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>__HOME__/Library/Logs/fieldcraft-embedder.log</string>
+  <key>StandardErrorPath</key>
+  <string>__HOME__/Library/Logs/fieldcraft-embedder.err.log</string>
+</dict>
+</plist>
