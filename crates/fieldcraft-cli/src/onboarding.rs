@@ -406,29 +406,63 @@ pub async fn run_doctor(offline: bool) -> DoctorReport {
             format!("{} does not exist", secrets_path.display()),
         );
     }
-    let key = fieldcraft_core::secrets::lookup_any(&EMBED_KEYS);
-    match (&key, &mode) {
-        (Some((_, source)), _) => report.push(
-            "embedding-key",
+    // Embeddings: which provider, and does it answer. BM25-only is stated,
+    // never silent (the September 2026 keyless weeks).
+    let spec = fieldcraft_core::embedding::EmbeddingSpec::from_env();
+    let remote = matches!(mode, Mode::Remote(_));
+    let mut call_local = false;
+    match &spec {
+        Err(err) => report.push("embedding-provider", Level::Fail, err.clone()),
+        Ok(_) if remote => report.push(
+            "embedding-provider",
             Level::Ok,
-            format!("gemini key from {source:?}"),
+            "remote mode: the server embeds (see server-embeddings)",
         ),
-        (None, Mode::Remote(_)) => report.push(
-            "embedding-key",
+        Ok(spec) if !spec.is_dense() => report.push(
+            "embedding-provider",
             Level::Warn,
-            "no gemini key on this machine (only the server needs one)",
+            "BM25-only mode (FIELDCRAFT_EMBED_PROVIDER=none): keyword retrieval; merge, \
+             resurrection and dream stay inert",
         ),
-        (None, _) => report.push(
-            "embedding-key",
-            Level::Fail,
-            "no GEMINI_API_KEY in env or secrets.env: retrieval is keyword-only and merge, resurrection and dream stay inert",
-        ),
+        Ok(spec) => {
+            call_local = true;
+            report.push(
+                "embedding-provider",
+                Level::Ok,
+                format!(
+                    "{} -> tag {}",
+                    spec.provider,
+                    spec.tag().unwrap_or_default()
+                ),
+            );
+        }
+    }
+    if let Ok(spec) = &spec
+        && spec.provider == fieldcraft_core::embedding::EmbeddingProvider::Gemini
+        && !remote
+    {
+        match fieldcraft_core::secrets::lookup_any(&EMBED_KEYS) {
+            Some((_, source)) => report.push(
+                "embedding-key",
+                Level::Ok,
+                format!("gemini key from {source:?}"),
+            ),
+            None => {
+                call_local = false;
+                report.push(
+                    "embedding-key",
+                    Level::Fail,
+                    "provider is gemini but no GEMINI_API_KEY in env or secrets.env: retrieval \
+                     is keyword-only and merge, resurrection and dream stay inert",
+                );
+            }
+        }
     }
 
-    // Live embedding call.
+    // Live embedding call with the configured provider (local catalog only).
     if offline {
         report.push("embedding-call", Level::Skip, "offline");
-    } else if key.is_some() {
+    } else if call_local {
         let call = tokio::task::spawn_blocking(|| {
             fieldcraft_retrieval::encode_dense(&["fieldcraft doctor".to_string()])
         });
@@ -437,7 +471,7 @@ pub async fn run_doctor(offline: bool) -> DoctorReport {
                 "embedding-call",
                 Level::Ok,
                 format!(
-                    "gemini answered ({} dims)",
+                    "provider answered ({} dims)",
                     vectors.first().map_or(0, Vec::len)
                 ),
             ),
@@ -446,7 +480,11 @@ pub async fn run_doctor(offline: bool) -> DoctorReport {
             Err(_) => report.push("embedding-call", Level::Fail, "timed out after 25s"),
         }
     } else {
-        report.push("embedding-call", Level::Skip, "no key");
+        report.push(
+            "embedding-call",
+            Level::Skip,
+            "no local embedding provider in use",
+        );
     }
 
     // Server.
@@ -565,6 +603,53 @@ pub async fn run_doctor(offline: bool) -> DoctorReport {
     report
 }
 
+/// The server's `/status` `embedding` block (servers from CH-0012 on).
+fn report_server_embedding(report: &mut DoctorReport, embedding: &serde_json::Value) {
+    let text = |key: &str| embedding.get(key).and_then(|v| v.as_str()).unwrap_or("");
+    let number = |key: &str| embedding.get(key).and_then(|v| v.as_i64()).unwrap_or(0);
+    let provider = text("provider");
+    let problem = text("problem");
+    let ready = embedding
+        .get("ready")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if text("mode") == "bm25-only" {
+        report.push(
+            "server-embeddings",
+            Level::Warn,
+            format!("server is in BM25-only mode: {problem}"),
+        );
+        return;
+    }
+    if !ready {
+        report.push(
+            "server-embeddings",
+            Level::Fail,
+            format!("server provider {provider} is not answering: {problem}"),
+        );
+        return;
+    }
+    let (missing, serving) = (number("serving_missing_vector"), number("serving_records"));
+    let level = if missing * 100 > serving.max(1) {
+        Level::Warn
+    } else {
+        Level::Ok
+    };
+    report.push(
+        "server-embeddings",
+        level,
+        format!(
+            "{provider} ready ({}); {missing} of {serving} serving lessons lack a vector{}",
+            text("tag"),
+            if level == Level::Warn {
+                " (run fieldcraft reindex on the server)"
+            } else {
+                ""
+            }
+        ),
+    );
+}
+
 async fn check_server(report: &mut DoctorReport, url: &str, token: Option<&str>) {
     let client = match reqwest::Client::builder()
         .timeout(Duration::from_secs(8))
@@ -605,6 +690,10 @@ async fn check_server(report: &mut DoctorReport, url: &str, token: Option<&str>)
         Ok(resp) if resp.status().is_success() => {
             report.push("server-auth", Level::Ok, "token accepted by /status");
             let body: serde_json::Value = resp.json().await.unwrap_or_default();
+            if let Some(embedding) = body.get("embedding") {
+                report_server_embedding(report, embedding);
+                return;
+            }
             match body
                 .get("embedding_key_configured")
                 .and_then(|v| v.as_bool())

@@ -78,6 +78,10 @@ use crate::schema::{canonical_project_id_from_existing, open_catalog, sqlite_err
 
 pub struct KnowledgeRepository {
     conn: Connection,
+    /// Tag of the vectors this connection reads and writes by default (see
+    /// `fieldcraft_core::embedding`). `None` is BM25-only mode: no vector is
+    /// read, and storing one is an error.
+    vector_tag: Option<String>,
 }
 
 pub const DERIVED_CLAIM_MIN_SOURCES: usize = 3;
@@ -228,13 +232,44 @@ pub struct ArchiveCandidate {
 
 impl KnowledgeRepository {
     pub fn open(path: &Path) -> Result<Self, TrError> {
-        Ok(Self {
-            conn: open_catalog(path)?,
-        })
+        Ok(Self::from_connection(open_catalog(path)?))
     }
 
+    /// Wrap a catalog connection; the vector tag comes from the configured
+    /// embedding provider.
     pub fn from_connection(conn: Connection) -> Self {
-        Self { conn }
+        Self {
+            conn,
+            vector_tag: fieldcraft_core::embedding::active_tag(),
+        }
+    }
+
+    /// Tag of the vectors this connection reads and writes by default.
+    pub fn vector_tag(&self) -> Option<&str> {
+        self.vector_tag.as_deref()
+    }
+
+    /// Read and write vectors of another tag (reindex, evaluation, tests).
+    pub fn set_vector_tag(&mut self, tag: Option<String>) {
+        self.vector_tag = tag;
+    }
+
+    /// Cosine thresholds for this connection's vectors.
+    pub fn cosine_thresholds(&self) -> fieldcraft_core::embedding::CosineThresholds {
+        fieldcraft_core::embedding::thresholds_for_tag(self.vector_tag())
+    }
+
+    /// SQL expression for the vector of `id_expr` under this connection's tag
+    /// (`NULL` in BM25-only mode). The tag is a quoted literal so callers can
+    /// keep positional parameters.
+    pub(crate) fn vector_sql(&self, id_expr: &str) -> String {
+        match self.vector_tag() {
+            Some(tag) => format!(
+                "(SELECT v.vector FROM knowledge_vectors v WHERE v.knowledge_id = {id_expr} AND v.tag = '{}')",
+                tag.replace('\'', "''")
+            ),
+            None => "NULL".to_string(),
+        }
     }
 
     pub fn connection(&self) -> &Connection {
@@ -721,24 +756,23 @@ impl KnowledgeRepository {
         let candidate_dense = self.load_dense_vector(&candidate.id)?;
         let candidate_cue_bundle = self.load_cue_bundle(&candidate.id)?;
         let kind = knowledge_kind_str(candidate.kind);
-        let mut stmt = self
-            .conn
-            .prepare(
-                "SELECT id, project_id, kind, state, title, payload_json, confidence,
-                        source_json, superseded_by, project_specific, created_at,
-                        valid_until, updated_at, affected_files_json, retrieval_text,
-                        schema_version, phase, tier, owner, session_date, source_refs_json,
-                        protected, dense_vector, cue_bundle
-                 FROM knowledge
-                 WHERE project_id = ?1
-                   AND kind = ?2
-                   AND id != ?3
-                   AND state IN ('active', 'provisional')
-                   AND (tier = 'active' OR tier IS NULL)
-                 ORDER BY created_at ASC
-                 LIMIT 200",
-            )
-            .map_err(sqlite_error)?;
+        let sql = format!(
+            "SELECT id, project_id, kind, state, title, payload_json, confidence,
+                    source_json, superseded_by, project_specific, created_at,
+                    valid_until, updated_at, affected_files_json, retrieval_text,
+                    schema_version, phase, tier, owner, session_date, source_refs_json,
+                    protected, {}, cue_bundle
+             FROM knowledge
+             WHERE project_id = ?1
+               AND kind = ?2
+               AND id != ?3
+               AND state IN ('active', 'provisional')
+               AND (tier = 'active' OR tier IS NULL)
+             ORDER BY created_at ASC
+             LIMIT 200",
+            self.vector_sql("knowledge.id")
+        );
+        let mut stmt = self.conn.prepare(&sql).map_err(sqlite_error)?;
         let rows = stmt
             .query_map(params![&candidate.project_id, kind, &candidate.id], |row| {
                 let record = row_to_knowledge(row)?;
@@ -756,6 +790,7 @@ impl KnowledgeRepository {
         for row in rows {
             let (neighbor, neighbor_dense, neighbor_cue_bundle) = row.map_err(sqlite_error)?;
             let score = duplicate_score(
+                self.cosine_thresholds().duplicate_min,
                 &candidate,
                 &neighbor,
                 candidate_dense.as_deref(),
@@ -1273,7 +1308,8 @@ impl KnowledgeRepository {
                 continue;
             };
             // Near-twin band: related, but not a merge-grade duplicate.
-            if !(0.85..DUPLICATE_MIN_DENSE_COSINE).contains(&sim) {
+            let thresholds = self.cosine_thresholds();
+            if !(thresholds.near_twin_min..thresholds.duplicate_min).contains(&sim) {
                 continue;
             }
             let ca = confirmed.get(a).copied().unwrap_or(0);
@@ -1413,14 +1449,14 @@ impl KnowledgeRepository {
         type VectorGroups = std::collections::HashMap<(String, String), Vec<(String, Vec<f32>)>>;
         let mut groups: VectorGroups = std::collections::HashMap::new();
         {
-            let mut stmt = self
-                .conn
-                .prepare(
-                    "SELECT id, project_id, kind, dense_vector FROM knowledge
-                     WHERE state = 'active' AND (tier = 'active' OR tier IS NULL)
-                       AND dense_vector IS NOT NULL",
-                )
-                .map_err(sqlite_error)?;
+            let sql = format!(
+                "SELECT id, project_id, kind, vector FROM (
+                   SELECT id, project_id, kind, rowid AS rid, {} AS vector FROM knowledge
+                   WHERE state = 'active' AND (tier = 'active' OR tier IS NULL)
+                 ) WHERE vector IS NOT NULL ORDER BY rid",
+                self.vector_sql("knowledge.id")
+            );
+            let mut stmt = self.conn.prepare(&sql).map_err(sqlite_error)?;
             let rows = stmt
                 .query_map([], |row| {
                     Ok((
@@ -1440,6 +1476,7 @@ impl KnowledgeRepository {
             }
         }
 
+        let thresholds = self.cosine_thresholds();
         // CPM communities over near-twin edges inside each group.
         let mut clusters: Vec<(i64, Vec<String>)> = Vec::new();
         for (_key, members) in groups {
@@ -1451,7 +1488,7 @@ impl KnowledgeRepository {
             for i in 0..n {
                 for j in (i + 1)..n {
                     if let Some(similarity) = cosine_similarity(&members[i].1, &members[j].1)
-                        .filter(|s| (0.80..DUPLICATE_MIN_DENSE_COSINE).contains(s))
+                        .filter(|s| (thresholds.dream_min..thresholds.duplicate_min).contains(s))
                     {
                         edges.push((i, j, similarity));
                     }
@@ -1791,26 +1828,126 @@ impl KnowledgeRepository {
         Ok(())
     }
 
-    /// Store a dense vector for a knowledge record.
-    /// Vector is stored as raw f32 bytes (little-endian).
+    /// Store a dense vector for a knowledge record under this connection's
+    /// tag, as raw little-endian f32 bytes. Errors in BM25-only mode.
     pub fn store_dense_vector(&self, id: &str, vector: &[f32]) -> Result<(), TrError> {
+        let tag = self.vector_tag().ok_or_else(|| TrError::Storage {
+            message: "no embedding provider configured (BM25-only mode); not storing a vector"
+                .into(),
+        })?;
+        self.store_vector_for_tag(id, tag, vector)
+    }
+
+    /// Store `vector` for `id` under `tag`, replacing that tag's previous
+    /// vector for the record. Vectors of other tags are kept. A no-op for an
+    /// id that is not in `knowledge`.
+    pub fn store_vector_for_tag(&self, id: &str, tag: &str, vector: &[f32]) -> Result<(), TrError> {
         let bytes: Vec<u8> = vector.iter().flat_map(|f| f.to_le_bytes()).collect();
         self.conn
             .execute(
-                "UPDATE knowledge SET dense_vector = ?1 WHERE id = ?2",
-                params![bytes, id],
+                "INSERT INTO knowledge_vectors (knowledge_id, tag, dims, vector, created_at)
+                 SELECT ?1, ?2, ?3, ?4, ?5 WHERE EXISTS (SELECT 1 FROM knowledge WHERE id = ?1)
+                 ON CONFLICT (knowledge_id, tag) DO UPDATE SET
+                   dims = excluded.dims, vector = excluded.vector,
+                   created_at = excluded.created_at",
+                params![id, tag, vector.len() as i64, bytes, Utc::now().to_rfc3339()],
             )
             .map_err(sqlite_error)?;
         Ok(())
     }
 
-    /// Load a dense vector for a knowledge record.
+    /// Vector count per tag, largest first.
+    pub fn vector_tag_counts(&self) -> Result<Vec<(String, i64)>, TrError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT tag, COUNT(*) FROM knowledge_vectors GROUP BY tag ORDER BY COUNT(*) DESC",
+            )
+            .map_err(sqlite_error)?;
+        let rows = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .map_err(sqlite_error)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(sqlite_error)
+    }
+
+    /// Records with no vector under `tag`, as `(id, retrieval_text)`: the
+    /// ones retrieval can serve (active/provisional, active tier) first, then
+    /// the rest, each by rowid. `fieldcraft reindex` works through this list,
+    /// so an interrupted run resumes where it stopped.
+    pub fn records_missing_vector(
+        &self,
+        tag: &str,
+        project_id: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<(String, String)>, TrError> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT k.id, k.retrieval_text FROM knowledge k
+                 WHERE NOT EXISTS (
+                   SELECT 1 FROM knowledge_vectors v WHERE v.knowledge_id = k.id AND v.tag = ?1
+                 )
+                   AND (?3 IS NULL OR k.project_id = ?3)
+                 ORDER BY (k.state IN ('active', 'provisional')
+                           AND (k.tier = 'active' OR k.tier IS NULL)) DESC, k.rowid
+                 LIMIT ?2",
+            )
+            .map_err(sqlite_error)?;
+        let rows = stmt
+            .query_map(params![tag, limit as i64, project_id], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
+            .map_err(sqlite_error)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(sqlite_error)
+    }
+
+    /// How many records (optionally of one project) have no vector under `tag`.
+    pub fn count_records_missing_vector(
+        &self,
+        tag: &str,
+        project_id: Option<&str>,
+    ) -> Result<i64, TrError> {
+        self.conn
+            .query_row(
+                "SELECT COUNT(*) FROM knowledge k
+                 WHERE NOT EXISTS (
+                   SELECT 1 FROM knowledge_vectors v WHERE v.knowledge_id = k.id AND v.tag = ?1
+                 )
+                   AND (?2 IS NULL OR k.project_id = ?2)",
+                params![tag, project_id],
+                |row| row.get(0),
+            )
+            .map_err(sqlite_error)
+    }
+
+    /// `(serving records missing a vector under tag, serving records)`, where
+    /// serving means active/provisional in the active tier.
+    pub fn vector_coverage(&self, tag: &str) -> Result<(i64, i64), TrError> {
+        self.conn
+            .query_row(
+                "SELECT
+                   SUM(NOT EXISTS (SELECT 1 FROM knowledge_vectors v
+                                   WHERE v.knowledge_id = k.id AND v.tag = ?1)),
+                   COUNT(*)
+                 FROM knowledge k
+                 WHERE k.state IN ('active', 'provisional')
+                   AND (k.tier = 'active' OR k.tier IS NULL)",
+                params![tag],
+                |row| Ok((row.get::<_, Option<i64>>(0)?.unwrap_or(0), row.get(1)?)),
+            )
+            .map_err(sqlite_error)
+    }
+
+    /// Load a record's dense vector under this connection's tag.
     pub fn load_dense_vector(&self, id: &str) -> Result<Option<Vec<f32>>, TrError> {
+        let Some(tag) = self.vector_tag() else {
+            return Ok(None);
+        };
         let blob: Option<Vec<u8>> = self
             .conn
             .query_row(
-                "SELECT dense_vector FROM knowledge WHERE id = ?1",
-                [id],
+                "SELECT vector FROM knowledge_vectors WHERE knowledge_id = ?1 AND tag = ?2",
+                params![id, tag],
                 |row| row.get(0),
             )
             .optional()
@@ -1844,7 +1981,10 @@ impl KnowledgeRepository {
             .map(|i| format!("?{}", i + 1))
             .collect::<Vec<_>>()
             .join(",");
-        let sql = format!("SELECT id, dense_vector FROM knowledge WHERE id IN ({placeholders})");
+        let sql = format!(
+            "SELECT k.id, {} FROM knowledge k WHERE k.id IN ({placeholders})",
+            self.vector_sql("k.id")
+        );
         let mut stmt = self.conn.prepare(&sql).map_err(sqlite_error)?;
         let params_iter: Vec<&dyn rusqlite::ToSql> =
             ids.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
@@ -1892,17 +2032,18 @@ impl KnowledgeRepository {
         )>,
         TrError,
     > {
-        let mut stmt = self
-            .conn
-            .prepare(
-                "SELECT id, kind, title, retrieval_text, payload_json, confidence, state, created_at, dense_vector, phase, owner, session_date, source_json, project_id
-                 FROM knowledge
-                 WHERE (project_id = ?1 OR project_specific = 0)
-                   AND state IN ('active', 'provisional')
-                   AND dense_vector IS NOT NULL
-                   AND (tier = ?2 OR tier IS NULL)",
-            )
-            .map_err(sqlite_error)?;
+        let sql = format!(
+            "SELECT * FROM (
+               SELECT id, kind, title, retrieval_text, payload_json, confidence, state, created_at,
+                      {} AS vector, phase, owner, session_date, source_json, project_id
+               FROM knowledge
+               WHERE (project_id = ?1 OR project_specific = 0)
+                 AND state IN ('active', 'provisional')
+                 AND (tier = ?2 OR tier IS NULL)
+             ) WHERE vector IS NOT NULL",
+            self.vector_sql("knowledge.id")
+        );
+        let mut stmt = self.conn.prepare(&sql).map_err(sqlite_error)?;
         let rows = stmt
             .query_map(params![project_id, tier], |row| {
                 let blob: Vec<u8> = row.get(8)?;
@@ -2422,70 +2563,6 @@ impl KnowledgeRepository {
         Ok(scored)
     }
 
-    /// Like `load_all_vectors` but filters on `project_specific = 0` instead of project_id.
-    /// `tier` param: `WHERE (tier = tier OR tier IS NULL)`. Default = "active".
-    #[allow(clippy::type_complexity)]
-    pub fn load_all_vectors_cross_project(
-        &self,
-        tier: &str,
-    ) -> Result<
-        Vec<(
-            String,
-            String,
-            String,
-            String,
-            String,
-            f32,
-            String,
-            String,
-            Vec<f32>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            String,
-        )>,
-        TrError,
-    > {
-        let mut stmt = self
-            .conn
-            .prepare(
-                "SELECT id, kind, title, retrieval_text, payload_json, confidence, state, created_at, dense_vector, phase, owner, session_date, source_json
-                 FROM knowledge
-                 WHERE project_specific = 0
-                   AND state IN ('active', 'provisional')
-                   AND dense_vector IS NOT NULL
-                   AND (tier = ?1 OR tier IS NULL)",
-            )
-            .map_err(sqlite_error)?;
-        let rows = stmt
-            .query_map(params![tier], |row| {
-                let blob: Vec<u8> = row.get(8)?;
-                let vector: Vec<f32> = blob
-                    .as_chunks::<4>()
-                    .0
-                    .iter()
-                    .map(|chunk| f32::from_le_bytes(*chunk))
-                    .collect();
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, String>(4)?,
-                    row.get::<_, f64>(5)? as f32,
-                    row.get::<_, String>(6)?,
-                    row.get::<_, String>(7)?,
-                    vector,
-                    row.get::<_, Option<String>>(9)?,
-                    row.get::<_, Option<String>>(10)?,
-                    row.get::<_, Option<String>>(11)?,
-                    row.get::<_, String>(12)?,
-                ))
-            })
-            .map_err(sqlite_error)?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(sqlite_error)
-    }
-
     /// FTS5 BM25 search across all projects (cross-project, project_specific = 0).
     /// `tier` param: `WHERE (tier = tier OR tier IS NULL)`. Default = "active".
     pub fn fts_search_cross_project(
@@ -2862,8 +2939,8 @@ fn relation_priority(kind: &str) -> u8 {
     }
 }
 
-const DUPLICATE_MIN_DENSE_COSINE: f32 = 0.92;
-/// CPM resolution for dream clustering. With dream edges in `[0.80, 0.92)`,
+/// CPM resolution for dream clustering. With dream edges in `[0.80, 0.92)`
+/// (Gemini thresholds, `fieldcraft_core::embedding`),
 /// `0.40` keeps the existing 3-path fixture merged (`gamma < 0.866 / 2`)
 /// while rejecting a single 0.85 bridge into a K4 (`gamma > 0.85 / 4`).
 const DREAM_CPM_RESOLUTION: f32 = 0.40;
@@ -2871,6 +2948,7 @@ const DUPLICATE_MIN_CUE_OVERLAP: f32 = 0.35;
 const DUPLICATE_MERGE_THRESHOLD: f32 = 0.82;
 
 fn duplicate_score(
+    duplicate_min_cosine: f32,
     a: &KnowledgeRecord,
     b: &KnowledgeRecord,
     a_dense: Option<&[f32]>,
@@ -2902,7 +2980,7 @@ fn duplicate_score(
         }
         return 0.0;
     };
-    if dense_score < DUPLICATE_MIN_DENSE_COSINE || title_contradicts(&a.title, &b.title) {
+    if dense_score < duplicate_min_cosine || title_contradicts(&a.title, &b.title) {
         return 0.0;
     }
 

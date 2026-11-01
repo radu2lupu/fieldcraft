@@ -87,12 +87,27 @@ async fn main() -> anyhow::Result<()> {
     // rewrite plists and once dropped the embedding key for weeks unnoticed.
     let secrets_path = data_dir.join(fieldcraft_core::secrets::SECRETS_FILE_NAME);
     fieldcraft_core::secrets::set_file_path(secrets_path.clone());
-    match fieldcraft_core::secrets::lookup_any(&["GEMINI_API_KEY", "GOOGLE_API_KEY"]) {
-        Some((_, source)) => info!(?source, "embeddings: gemini api key configured"),
-        None => tracing::warn!(
+    // A misconfigured provider stops the server; a configured but unreachable
+    // one, or BM25-only mode, is stated loudly here and in /status.
+    if let Err(err) = fieldcraft_core::embedding::EmbeddingSpec::from_env() {
+        anyhow::bail!("embedding configuration: {err}");
+    }
+    let readiness = fieldcraft_retrieval::embedding_readiness();
+    match (&readiness.problem, readiness.mode) {
+        (None, _) => info!(
+            provider = %readiness.provider,
+            tag = ?readiness.tag,
+            "embeddings: ready"
+        ),
+        (Some(problem), "bm25-only") => tracing::warn!(
             path = %secrets_path.display(),
-            "NO EMBEDDING KEY: set GEMINI_API_KEY in the environment or in the secrets file; \
-             retrieval degrades to BM25 and merge, resurrection and dream stay inert"
+            "BM25-ONLY MODE: {problem}"
+        ),
+        (Some(problem), _) => tracing::warn!(
+            provider = %readiness.provider,
+            path = %secrets_path.display(),
+            "EMBEDDINGS NOT READY: {problem}; queries fall back to BM25 until it answers, \
+             and new lessons stay vectorless until `fieldcraft reindex`"
         ),
     }
 

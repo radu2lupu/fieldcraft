@@ -9,7 +9,7 @@ use fieldcraft_core::{
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use crate::sqlite_search::SqliteHit;
-use crate::{encode_dense, internal};
+use crate::{TextRole, encode_with_spec, internal};
 
 // ---------------------------------------------------------------------------
 // Public API types
@@ -1289,20 +1289,56 @@ pub async fn retrieve(
     retrieve_from_repository(request, &repo)
 }
 
-/// Embed the request's query text. Needs no repository, so callers can run it
-/// without holding any database handle or lock. An empty vector means
-/// "no dense signal" and makes retrieval BM25-only.
-pub fn embed_query(request: &RetrievalRequest) -> Vec<f32> {
-    let query = build_query(request);
-    match encode_dense(std::slice::from_ref(&query)) {
-        Ok(vectors) => vectors.into_iter().next().unwrap_or_default(),
-        Err(err) => {
-            eprintln!(
-                "WARNING: dense query embedding failed; continuing sparse-only BM25 retrieval: {err}"
-            );
-            Vec::new()
-        }
+/// A query embedding and the tag of the model that made it. Retrieval compares
+/// it only with record vectors of the same tag.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct QueryVector {
+    pub tag: Option<String>,
+    pub values: Vec<f32>,
+}
+
+impl QueryVector {
+    /// No dense signal: retrieval runs BM25-only.
+    pub fn none() -> Self {
+        Self::default()
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.tag.is_none() || self.values.is_empty()
+    }
+}
+
+/// Embed the request's query text with the configured provider. Needs no
+/// repository, so callers can run it without holding any database handle or
+/// lock. In BM25-only mode, or when the provider fails, the result is empty
+/// and retrieval runs BM25-only.
+pub fn embed_query(request: &RetrievalRequest) -> QueryVector {
+    embed_query_text(&build_query(request))
+}
+
+/// [`embed_query`] for already-built query text (see [`build_query`]).
+pub fn embed_query_text(query: &str) -> QueryVector {
+    try_embed_query_text(query).unwrap_or_else(|err| {
+        eprintln!(
+            "WARNING: dense query embedding failed; continuing sparse-only BM25 retrieval: {err}"
+        );
+        QueryVector::none()
+    })
+}
+
+/// Like [`embed_query_text`], but a provider failure is an error. BM25-only
+/// mode is `Ok` with an empty vector.
+pub fn try_embed_query_text(query: &str) -> Result<QueryVector, String> {
+    let spec = fieldcraft_core::embedding::EmbeddingSpec::from_env()
+        .map_err(|err| format!("embedding configuration invalid: {err}"))?;
+    let Some(tag) = spec.tag() else {
+        return Ok(QueryVector::none());
+    };
+    let vectors = encode_with_spec(&spec, TextRole::Query, &[query.to_string()])?;
+    Ok(QueryVector {
+        tag: Some(tag),
+        values: vectors.into_iter().next().unwrap_or_default(),
+    })
 }
 
 pub fn retrieve_from_repository(
@@ -1314,12 +1350,25 @@ pub fn retrieve_from_repository(
 }
 
 /// Retrieval with an already-computed query vector (see [`embed_query`]).
-/// An empty `query_vector` runs the BM25-only path.
+/// An empty query vector, or one whose tag differs from the repository's,
+/// runs the BM25-only path: vectors of different models are never compared.
 pub fn retrieve_with_query_vector(
     request: RetrievalRequest,
     repo: &fieldcraft_storage::KnowledgeRepository,
-    query_vector: Vec<f32>,
+    query: QueryVector,
 ) -> Result<RetrievalResponse, TrError> {
+    let query_vector = if query.is_empty() {
+        Vec::new()
+    } else if query.tag.as_deref() != repo.vector_tag() {
+        eprintln!(
+            "WARNING: query vector tag {:?} differs from the store's {:?}; BM25-only retrieval",
+            query.tag,
+            repo.vector_tag()
+        );
+        Vec::new()
+    } else {
+        query.values
+    };
     let query = build_query(&request);
     let intent = detect_query_intent(&request);
     let mut weights = weights_for_intent(intent);
@@ -1476,22 +1525,27 @@ pub fn retrieve_with_query_vector(
 // SQLite indexing
 // ---------------------------------------------------------------------------
 
-/// Index a knowledge record in SQLite (store dense vector).
+/// Index a knowledge record in SQLite: embed it with the configured provider
+/// and store the vector under that provider's tag. A no-op in BM25-only mode.
 pub fn index_knowledge_sqlite(
     repo: &fieldcraft_storage::KnowledgeRepository,
     record: &KnowledgeRecord,
 ) -> Result<(), TrError> {
+    let spec = fieldcraft_core::embedding::EmbeddingSpec::from_env().map_err(internal)?;
+    let Some(tag) = spec.tag() else {
+        return Ok(());
+    };
     let retrieval_text = if record.retrieval_text.is_empty() {
         build_embedding_text(record)
     } else {
         record.retrieval_text.clone()
     };
 
-    let embeddings = encode_dense(&[retrieval_text])
-        .map_err(|e| internal(format!("encode_dense failed: {e}")))?;
+    let embeddings = encode_with_spec(&spec, TextRole::Document, &[retrieval_text])
+        .map_err(|e| internal(format!("embedding failed: {e}")))?;
     let dense_vec = embeddings.into_iter().next().unwrap_or_default();
 
-    repo.store_dense_vector(&record.id, &dense_vec)
+    repo.store_vector_for_tag(&record.id, &tag, &dense_vec)
         .map_err(|e| internal(format!("store vector failed: {e}")))?;
 
     Ok(())
@@ -2493,5 +2547,47 @@ mod tests {
             score_high > score_low,
             "higher max_bm25 should reduce normalized score: {score_high} vs {score_low}"
         );
+    }
+    #[test]
+    fn query_vectors_of_another_tag_are_never_compared() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut repo =
+            fieldcraft_storage::KnowledgeRepository::open(&dir.path().join("memory.sqlite3"))
+                .unwrap();
+        repo.set_vector_tag(Some("gemini:m:2".into()));
+        let mut record = make_record(KnowledgeKind::Claim, r#"{"statement":"advisory locks"}"#);
+        record.retrieval_text = "postgres advisory locks deadlock".to_string();
+        repo.insert_knowledge(&record).unwrap();
+        repo.store_dense_vector("test-id", &[1.0, 0.0]).unwrap();
+
+        let request = make_request("advisory locks", vec![], None);
+        let same = retrieve_with_query_vector(
+            request.clone(),
+            &repo,
+            QueryVector {
+                tag: Some("gemini:m:2".into()),
+                values: vec![1.0, 0.0],
+            },
+        )
+        .unwrap();
+        assert_eq!(same.query_dense, vec![1.0, 0.0]);
+
+        let other = retrieve_with_query_vector(
+            request.clone(),
+            &repo,
+            QueryVector {
+                tag: Some("gemma:m:2".into()),
+                values: vec![1.0, 0.0],
+            },
+        )
+        .unwrap();
+        assert!(
+            other.query_dense.is_empty(),
+            "other-tag query must go BM25-only"
+        );
+        assert_eq!(other.lessons.len(), 1, "BM25 still finds the lesson");
+
+        let none = retrieve_with_query_vector(request, &repo, QueryVector::none()).unwrap();
+        assert!(none.query_dense.is_empty());
     }
 }

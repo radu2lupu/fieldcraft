@@ -1,29 +1,168 @@
 pub mod cue_match;
+mod gemma;
 pub mod record_cache;
 pub mod retrieval;
 pub mod sqlite_search;
 pub use cue_match::{MISMATCH_FLOOR, cue_match_factor};
+pub use fieldcraft_core::embedding::{EmbeddingProvider, EmbeddingSpec};
 pub use record_cache::archive_matches;
 pub use retrieval::{
-    LessonPreference, RetrievalRequest, RetrievalResponse, RetrievedLesson, TokenReceipt,
-    build_embedding_text, build_query, index_knowledge_sqlite, retrieve,
+    LessonPreference, QueryVector, RetrievalRequest, RetrievalResponse, RetrievedLesson,
+    TokenReceipt, build_embedding_text, build_query, index_knowledge_sqlite, retrieve,
 };
 
 use fieldcraft_core::TrError;
 use reqwest::blocking::Client;
 use serde_json::{Value, json};
 use std::env;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
-const DEFAULT_GEMINI_MODEL: &str = "models/gemini-embedding-001";
 const DEFAULT_GEMINI_BASE_URL: &str = "https://generativelanguage.googleapis.com/v1beta";
-const DEFAULT_EMBED_DIM: usize = 768;
 const DEFAULT_MAX_CHARS: usize = 8000;
 const MAX_GEMINI_BATCH: usize = 100;
 const MAX_ATTEMPTS: usize = 6;
 const MAX_RETRY_DELAY_SECS: f64 = 65.0;
+
+/// What a text is for. Gemma prefixes queries and documents with different
+/// task prompts (model card); Gemini embeds both the same way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextRole {
+    Query,
+    Document,
+}
+
+/// Encode `texts` with `spec`'s provider. Vectors are L2-normalized and have
+/// `spec.dims` dimensions. BM25-only mode (`provider = none`) is an error:
+/// callers decide what "no vector" means for them.
+pub fn encode_with_spec(
+    spec: &EmbeddingSpec,
+    role: TextRole,
+    texts: &[String],
+) -> Result<Vec<Vec<f32>>, String> {
+    if texts.is_empty() {
+        return Ok(Vec::new());
+    }
+    let result = match spec.provider {
+        EmbeddingProvider::None => {
+            return Err(
+                "BM25-only mode: no embedding provider configured (FIELDCRAFT_EMBED_PROVIDER=none)"
+                    .to_string(),
+            );
+        }
+        EmbeddingProvider::Gemini => encode_texts_gemini(spec, texts, MAX_GEMINI_BATCH),
+        EmbeddingProvider::Gemma => gemma::encode(spec, role, texts),
+    };
+    record_health(&result);
+    result
+}
+
+/// Documents with the configured provider (see `fieldcraft_core::embedding`).
+pub fn encode_dense(texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
+    let spec = EmbeddingSpec::from_env()?;
+    encode_with_spec(&spec, TextRole::Document, texts)
+}
+
+/// Outcome of the most recent embedding calls in this process, for `/status`.
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct EmbeddingHealth {
+    pub calls: u64,
+    pub failures: u64,
+    pub last_ok_unix: Option<u64>,
+    pub last_error_unix: Option<u64>,
+    pub last_error: Option<String>,
+}
+
+static HEALTH: Mutex<EmbeddingHealth> = Mutex::new(EmbeddingHealth {
+    calls: 0,
+    failures: 0,
+    last_ok_unix: None,
+    last_error_unix: None,
+    last_error: None,
+});
+
+fn unix_now() -> u64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+fn record_health(result: &Result<Vec<Vec<f32>>, String>) {
+    let mut health = HEALTH.lock().unwrap_or_else(|e| e.into_inner());
+    health.calls += 1;
+    match result {
+        Ok(_) => health.last_ok_unix = Some(unix_now()),
+        Err(err) => {
+            health.failures += 1;
+            health.last_error_unix = Some(unix_now());
+            health.last_error = Some(body_snippet(err));
+        }
+    }
+}
+
+pub fn embedding_health() -> EmbeddingHealth {
+    HEALTH.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+/// Whether this process can embed right now, and with what. The one place
+/// `/status`, server start-up and `fieldcraft doctor` get that answer from,
+/// so BM25-only operation is always stated, never silent.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct EmbeddingReadiness {
+    pub provider: String,
+    pub model: String,
+    pub dims: usize,
+    pub tag: Option<String>,
+    /// `dense` (hybrid retrieval) or `bm25-only`.
+    pub mode: &'static str,
+    /// The provider answers now (always false in BM25-only mode).
+    pub ready: bool,
+    /// Why not ready, or why BM25-only.
+    pub problem: Option<String>,
+}
+
+pub fn embedding_readiness() -> EmbeddingReadiness {
+    let spec = match EmbeddingSpec::from_env() {
+        Ok(spec) => spec,
+        Err(err) => {
+            return EmbeddingReadiness {
+                provider: "invalid".into(),
+                model: String::new(),
+                dims: 0,
+                tag: None,
+                mode: "bm25-only",
+                ready: false,
+                problem: Some(err),
+            };
+        }
+    };
+    let problem = match spec.provider {
+        EmbeddingProvider::None => Some(
+            "FIELDCRAFT_EMBED_PROVIDER=none: BM25-only retrieval; merge, resurrection and dream \
+             stay inert"
+                .to_string(),
+        ),
+        EmbeddingProvider::Gemini => env_key(&["GEMINI_API_KEY", "GOOGLE_API_KEY"])
+            .is_none()
+            .then(|| "no GEMINI_API_KEY in env or secrets.env".to_string()),
+        EmbeddingProvider::Gemma => gemma::probe(&spec).err(),
+    };
+    EmbeddingReadiness {
+        provider: spec.provider.as_str().to_string(),
+        model: spec.model.clone(),
+        dims: spec.dims,
+        tag: spec.tag(),
+        mode: if spec.is_dense() {
+            "dense"
+        } else {
+            "bm25-only"
+        },
+        ready: spec.is_dense() && problem.is_none(),
+        problem,
+    }
+}
 
 #[derive(Debug, Clone)]
 struct GeminiConfig {
@@ -36,10 +175,10 @@ struct GeminiConfig {
 }
 
 impl GeminiConfig {
-    fn from_env() -> Result<Self, String> {
+    fn from_spec(spec: &EmbeddingSpec) -> Result<Self, String> {
         Self::from_values(
-            env_non_empty("FIELDCRAFT_EMBED_GEMINI_MODEL").as_deref(),
-            env_non_empty("FIELDCRAFT_EMBED_DIM").as_deref(),
+            Some(&spec.model),
+            Some(&spec.dims.to_string()),
             env_non_empty("FIELDCRAFT_EMBED_MAX_CHARS").as_deref(),
             env_non_empty("FIELDCRAFT_EMBED_SLEEP_MS").as_deref(),
             env_non_empty("FIELDCRAFT_EMBED_GEMINI_BASE_URL").as_deref(),
@@ -57,9 +196,13 @@ impl GeminiConfig {
             model: model
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
-                .unwrap_or(DEFAULT_GEMINI_MODEL)
+                .unwrap_or(fieldcraft_core::embedding::GEMINI_DEFAULT_MODEL)
                 .to_string(),
-            dim: parse_positive_usize("FIELDCRAFT_EMBED_DIM", dim, DEFAULT_EMBED_DIM)?,
+            dim: parse_positive_usize(
+                "FIELDCRAFT_EMBED_DIM",
+                dim,
+                fieldcraft_core::embedding::DEFAULT_DIMS,
+            )?,
             max_chars: parse_positive_usize(
                 "FIELDCRAFT_EMBED_MAX_CHARS",
                 max_chars,
@@ -92,25 +235,38 @@ fn http_client() -> Result<&'static Client, String> {
             Client::builder()
                 .timeout(Duration::from_secs(120))
                 .build()
-                .map_err(|err| format!("Gemini embedding HTTP client build failed: {err}"))
+                .map_err(|err| format!("embedding HTTP client build failed: {err}"))
         })
         .as_ref()
         .map_err(Clone::clone)
 }
 
-pub fn encode_dense(texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
-    encode_texts_gemini(texts, MAX_GEMINI_BATCH)
-}
-
-fn encode_texts_gemini(texts: &[String], batch: usize) -> Result<Vec<Vec<f32>>, String> {
+fn encode_texts_gemini(
+    spec: &EmbeddingSpec,
+    texts: &[String],
+    batch: usize,
+) -> Result<Vec<Vec<f32>>, String> {
     if texts.is_empty() {
         return Ok(Vec::new());
     }
-    let config = GeminiConfig::from_env()?;
+    let config = GeminiConfig::from_spec(spec)?;
     let key = env_key(&["GEMINI_API_KEY", "GOOGLE_API_KEY"]).ok_or_else(|| {
         "Gemini embedding API key missing; set GEMINI_API_KEY or GOOGLE_API_KEY".to_string()
     })?;
     encode_with_config(&config, &key, texts, batch)
+}
+
+/// Run blocking HTTP work on a dedicated OS thread, never on the caller's
+/// thread (see `encode_with_config` for why).
+pub(crate) fn off_runtime<T: Send>(
+    work: impl FnOnce() -> Result<T, String> + Send,
+) -> Result<T, String> {
+    thread::scope(|scope| {
+        scope
+            .spawn(work)
+            .join()
+            .unwrap_or_else(|_| Err("embedding worker thread panicked".to_string()))
+    })
 }
 
 /// Run the blocking Gemini calls on a dedicated OS thread, never on the
@@ -134,12 +290,7 @@ fn encode_with_config(
     if texts.is_empty() {
         return Ok(Vec::new());
     }
-    thread::scope(|scope| {
-        scope
-            .spawn(|| encode_blocking(config, key, texts, batch))
-            .join()
-            .unwrap_or_else(|_| Err("Gemini embedding worker thread panicked".to_string()))
-    })
+    off_runtime(|| encode_blocking(config, key, texts, batch))
 }
 
 fn encode_blocking(

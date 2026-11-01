@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 pub mod cue_extract;
+pub mod embedding;
 pub mod secrets;
 
 // ---------------------------------------------------------------------------

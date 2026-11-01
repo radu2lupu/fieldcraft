@@ -129,7 +129,8 @@ enum Command {
         source: Option<PathBuf>,
     },
 
-    /// Rebuild dense vector index for all records missing embeddings
+    /// Build dense vectors for records missing one under an embedding provider's tag
+    /// (resumable; other providers' vectors are kept)
     Reindex {
         /// Project ID (default: all projects)
         #[arg(long)]
@@ -137,9 +138,15 @@ enum Command {
         /// Batch size for embedding computation
         #[arg(long, default_value_t = 32)]
         batch_size: usize,
-        /// Re-embed every selected record, overwriting existing vectors
+        /// Re-embed every selected record, overwriting this tag's existing vectors
         #[arg(long, default_value_t = false)]
         all: bool,
+        /// Provider to build vectors for: gemma | gemini (default: FIELDCRAFT_EMBED_PROVIDER)
+        #[arg(long)]
+        provider: Option<String>,
+        /// Stop after this many records (0 = all)
+        #[arg(long, default_value_t = 0)]
+        limit: usize,
     },
 
     /// Re-extract old lessons using the new directive/context format
@@ -752,7 +759,18 @@ async fn async_main(cli: Cli) -> Result<()> {
             project,
             batch_size,
             all,
-        } => cmd_reindex(project.as_deref(), batch_size, all).await,
+            provider,
+            limit,
+        } => {
+            cmd_reindex(
+                project.as_deref(),
+                batch_size,
+                all,
+                provider.as_deref(),
+                limit,
+            )
+            .await
+        }
 
         Command::ReExtract {
             target_version,
@@ -4332,7 +4350,9 @@ async fn cmd_import(project_id: &str, source: Option<PathBuf>) -> Result<()> {
     // Auto-index embeddings for newly imported records
     if imported > 0 {
         println!("Indexing embeddings...");
-        cmd_reindex(Some(project_id), 32, false).await?;
+        if let Err(err) = cmd_reindex(Some(project_id), 32, false, None, 0).await {
+            eprintln!("  embeddings not built ({err}); run `fieldcraft reindex` later");
+        }
     }
 
     Ok(())
@@ -4377,84 +4397,156 @@ fn extract_md_title(body: &str, filename: &str) -> String {
 // Command: reindex
 // ---------------------------------------------------------------------------
 
-async fn cmd_reindex(project: Option<&str>, batch_size: usize, all: bool) -> Result<()> {
+/// Build dense vectors for one embedding provider's tag.
+///
+/// Default (resumable): embed only records that have no vector under the
+/// tag, serving records first, one short write transaction per batch, so an
+/// interrupted run continues where it stopped and readers (the server's
+/// queries) are never blocked. Vectors of other tags are left alone: switching
+/// providers is reindex first, then flip `FIELDCRAFT_EMBED_PROVIDER`.
+/// `--all` re-embeds every selected record, overwriting this tag's vectors.
+async fn cmd_reindex(
+    project: Option<&str>,
+    batch_size: usize,
+    all: bool,
+    provider: Option<&str>,
+    limit: usize,
+) -> Result<()> {
+    use fieldcraft_core::embedding::{EmbeddingProvider, EmbeddingSpec};
+
+    let spec = match provider {
+        Some(name) => {
+            EmbeddingSpec::for_provider(EmbeddingProvider::parse(name).map_err(anyhow::Error::msg)?)
+        }
+        None => EmbeddingSpec::from_env(),
+    }
+    .map_err(anyhow::Error::msg)?;
+    let Some(tag) = spec.tag() else {
+        anyhow::bail!("BM25-only mode (provider none): there are no vectors to build");
+    };
+    let batch_size = batch_size.max(1);
     let db_path = fieldcraft_db_path_for_command("reindex")?;
     let repo =
         KnowledgeRepository::open(&db_path).context("failed to open knowledge repository")?;
-    let conn = repo.connection();
 
-    let stmt = if let Some(pid) = project {
-        let sql = if all {
-            "SELECT id, retrieval_text FROM knowledge WHERE project_id = ?1"
-        } else {
-            "SELECT id, retrieval_text FROM knowledge WHERE project_id = ?1 AND dense_vector IS NULL"
-        };
-        let mut s = conn.prepare(sql).context("prepare")?;
-        let rows: Vec<(String, String)> = s
-            .query_map(rusqlite::params![pid], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })
-            .context("query")?
-            .filter_map(|r| r.ok())
-            .collect();
-        rows
+    let mut pending: Vec<(String, String)> = if all {
+        let conn = repo.connection();
+        let mut s = conn
+            .prepare(
+                "SELECT id, retrieval_text FROM knowledge
+                 WHERE (?1 IS NULL OR project_id = ?1) ORDER BY rowid",
+            )
+            .context("prepare")?;
+        s.query_map(rusqlite::params![project], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .context("query")?
+        .filter_map(|r| r.ok())
+        .collect()
     } else {
-        let sql = if all {
-            "SELECT id, retrieval_text FROM knowledge"
-        } else {
-            "SELECT id, retrieval_text FROM knowledge WHERE dense_vector IS NULL"
-        };
-        let mut s = conn.prepare(sql).context("prepare")?;
-        let rows: Vec<(String, String)> = s
-            .query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })
-            .context("query")?
-            .filter_map(|r| r.ok())
-            .collect();
-        rows
+        Vec::new()
     };
-
-    let total = stmt.len();
+    let mut total = if all {
+        pending.len() as i64
+    } else {
+        repo.count_records_missing_vector(&tag, project)?
+    };
+    if limit > 0 {
+        total = total.min(limit as i64);
+    }
     if total == 0 {
-        if all {
-            println!("No records found to reindex.");
-        } else {
-            println!("All records already have embeddings.");
-        }
+        println!("Nothing to do: every selected record has a {tag} vector.");
         return Ok(());
     }
+    let mode = if all { "all records" } else { "missing" };
+    println!("Embedding {total} records for {tag} ({mode}, batch_size={batch_size})...");
 
-    let mode = if all {
-        "all records"
-    } else {
-        "missing embeddings"
-    };
-    println!("Indexing {total} records ({mode}, batch_size={batch_size})...");
-
-    let mut indexed = 0;
-    for chunk in stmt.chunks(batch_size) {
-        let texts: Vec<String> = chunk.iter().map(|(_, t)| t.clone()).collect();
-        let ids: Vec<&str> = chunk.iter().map(|(id, _)| id.as_str()).collect();
-
-        match fieldcraft_retrieval::encode_dense(&texts) {
-            Ok(vectors) => {
-                for (id, vector) in ids.iter().zip(vectors.iter()) {
-                    if let Err(e) = repo.store_dense_vector(id, vector) {
-                        eprintln!("  failed to store vector for {id}: {e}");
+    let started = std::time::Instant::now();
+    let mut done: usize = 0;
+    let mut skipped: std::collections::HashSet<String> = std::collections::HashSet::new();
+    loop {
+        if limit > 0 && done + skipped.len() >= limit {
+            break;
+        }
+        let batch: Vec<(String, String)> = if all {
+            let n = batch_size.min(pending.len());
+            pending.drain(..n).collect()
+        } else {
+            repo.records_missing_vector(&tag, project, batch_size + skipped.len())?
+                .into_iter()
+                .filter(|(id, _)| !skipped.contains(id))
+                .take(batch_size)
+                .collect()
+        };
+        if batch.is_empty() {
+            break;
+        }
+        let texts: Vec<String> = batch.iter().map(|(_, t)| t.clone()).collect();
+        let spec_for_batch = spec.clone();
+        let encoded = tokio::task::spawn_blocking(move || {
+            fieldcraft_retrieval::encode_with_spec(
+                &spec_for_batch,
+                fieldcraft_retrieval::TextRole::Document,
+                &texts,
+            )
+        })
+        .await?;
+        let vectors: Vec<Option<Vec<f32>>> = match encoded {
+            Ok(vectors) => vectors.into_iter().map(Some).collect(),
+            Err(err) => {
+                // One bad text must not stall the run: retry one by one.
+                eprintln!("\n  batch failed ({err}); retrying one by one");
+                let mut out = Vec::with_capacity(batch.len());
+                for (id, text) in &batch {
+                    let spec_one = spec.clone();
+                    let text = text.clone();
+                    let one = tokio::task::spawn_blocking(move || {
+                        fieldcraft_retrieval::encode_with_spec(
+                            &spec_one,
+                            fieldcraft_retrieval::TextRole::Document,
+                            &[text],
+                        )
+                    })
+                    .await?;
+                    match one {
+                        Ok(mut v) => out.push(v.pop()),
+                        Err(err) => {
+                            eprintln!("  skipping {id}: {err}");
+                            out.push(None);
+                        }
                     }
                 }
-                indexed += ids.len();
-                eprint!("\r  {indexed}/{total}");
+                out
             }
-            Err(e) => {
-                eprintln!("\n  embedding batch failed: {e}");
+        };
+        let conn = repo.connection();
+        conn.execute_batch("BEGIN IMMEDIATE")?;
+        for ((id, _), vector) in batch.iter().zip(vectors) {
+            match vector {
+                Some(vector) => {
+                    repo.store_vector_for_tag(id, &tag, &vector)?;
+                    done += 1;
+                }
+                None => {
+                    skipped.insert(id.clone());
+                }
             }
         }
+        conn.execute_batch("COMMIT")?;
+        let rate = done as f64 / started.elapsed().as_secs_f64().max(0.001);
+        let left = (total - done as i64 - skipped.len() as i64).max(0) as f64;
+        eprint!(
+            "\r  {done}/{total} embedded, {} skipped, {rate:.0}/s, ~{:.0}s left   ",
+            skipped.len(),
+            left / rate.max(0.001)
+        );
     }
-
     eprintln!();
-    println!("Reindex complete: {indexed}/{total} records indexed.");
+    println!(
+        "Reindex finished for {tag}: {done} embedded, {} skipped, in {:.0}s.",
+        skipped.len(),
+        started.elapsed().as_secs_f64()
+    );
     Ok(())
 }
 

@@ -143,17 +143,20 @@ impl RecordCache {
 }
 
 type SharedCache = Arc<RwLock<RecordCache>>;
+/// (catalog file, vector tag)
+type CacheKey = (PathBuf, Option<String>);
 
-/// One cache per catalog file, shared by every connection in the process.
-fn registry() -> &'static Mutex<HashMap<PathBuf, SharedCache>> {
-    static REGISTRY: OnceLock<Mutex<HashMap<PathBuf, SharedCache>>> = OnceLock::new();
+/// One cache per (catalog file, vector tag), shared by every connection in the
+/// process that reads that tag.
+fn registry() -> &'static Mutex<HashMap<CacheKey, SharedCache>> {
+    static REGISTRY: OnceLock<Mutex<HashMap<CacheKey, SharedCache>>> = OnceLock::new();
     REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 fn cache_for(repo: &KnowledgeRepository) -> SharedCache {
     match repo.connection().path().filter(|p| !p.is_empty()) {
         Some(path) => {
-            let key = PathBuf::from(path);
+            let key = (PathBuf::from(path), repo.vector_tag().map(str::to_string));
             let mut map = registry().lock().unwrap_or_else(|e| e.into_inner());
             map.entry(key).or_default().clone()
         }

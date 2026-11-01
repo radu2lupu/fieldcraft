@@ -38,7 +38,7 @@ CREATE TRIGGER IF NOT EXISTS knowledge_vector_change_delete AFTER DELETE ON know
     INSERT INTO knowledge_vector_changes(knowledge_id) VALUES (old.id);
 END;
 CREATE TRIGGER IF NOT EXISTS knowledge_vector_change_update
-AFTER UPDATE OF id, dense_vector, tier, state, superseded_by, source_json, project_id
+AFTER UPDATE OF id, tier, state, superseded_by, source_json, project_id
 ON knowledge BEGIN
     INSERT INTO knowledge_vector_changes(knowledge_id) VALUES (old.id);
     INSERT INTO knowledge_vector_changes(knowledge_id)
@@ -51,6 +51,15 @@ END;
 CREATE TRIGGER IF NOT EXISTS cue_index_identity_change_delete AFTER DELETE ON cue_index
 WHEN old.dim_name = 'identity' BEGIN
     INSERT INTO knowledge_vector_changes(knowledge_id) VALUES (old.record_id);
+END;
+CREATE TRIGGER IF NOT EXISTS knowledge_vectors_change_insert AFTER INSERT ON knowledge_vectors BEGIN
+    INSERT INTO knowledge_vector_changes(knowledge_id) VALUES (new.knowledge_id);
+END;
+CREATE TRIGGER IF NOT EXISTS knowledge_vectors_change_update AFTER UPDATE ON knowledge_vectors BEGIN
+    INSERT INTO knowledge_vector_changes(knowledge_id) VALUES (new.knowledge_id);
+END;
+CREATE TRIGGER IF NOT EXISTS knowledge_vectors_change_delete AFTER DELETE ON knowledge_vectors BEGIN
+    INSERT INTO knowledge_vector_changes(knowledge_id) VALUES (old.knowledge_id);
 END;
 "#;
 
@@ -88,11 +97,6 @@ pub struct DenseHitRow {
     pub project_id: String,
 }
 
-const INDEX_ROW_COLUMNS: &str = "k.rowid, k.id, k.state, k.tier, k.superseded_by IS NULL, \
-     k.source_json, k.project_id, \
-     EXISTS (SELECT 1 FROM cue_index c WHERE c.record_id = k.id AND c.dim_name = 'identity'), \
-     k.dense_vector";
-
 fn index_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RecordIndexRow> {
     let blob: Option<Vec<u8>> = row.get(8)?;
     Ok(RecordIndexRow {
@@ -116,6 +120,16 @@ pub(crate) fn id_placeholders(n: usize) -> String {
 }
 
 impl KnowledgeRepository {
+    /// Columns of a [`RecordIndexRow`] (vector under this connection's tag).
+    fn index_row_columns(&self) -> String {
+        format!(
+            "k.rowid, k.id, k.state, k.tier, k.superseded_by IS NULL, k.source_json, k.project_id,
+             EXISTS (SELECT 1 FROM cue_index c WHERE c.record_id = k.id AND c.dim_name = 'identity'),
+             {}",
+            self.vector_sql("k.id")
+        )
+    }
+
     /// Open a connection for reads only: no schema work, no migrations, so it
     /// never takes a write lock. The catalog must already have been opened
     /// once with [`KnowledgeRepository::open`] (the server does that at start).
@@ -193,9 +207,10 @@ impl KnowledgeRepository {
     /// scans visited them: by state, then rowid.
     pub fn load_record_index_rows(&self) -> Result<Vec<RecordIndexRow>, TrError> {
         let sql = format!(
-            "SELECT {INDEX_ROW_COLUMNS} FROM knowledge k
+            "SELECT {} FROM knowledge k
              WHERE k.state IN ('active', 'provisional')
-             ORDER BY k.state, k.rowid"
+             ORDER BY k.state, k.rowid",
+            self.index_row_columns()
         );
         let mut stmt = self.connection().prepare(&sql).map_err(sqlite_error)?;
         let rows = stmt.query_map([], index_row).map_err(sqlite_error)?;
@@ -211,8 +226,9 @@ impl KnowledgeRepository {
         let mut out = Vec::with_capacity(ids.len());
         for chunk in ids.chunks(500) {
             let sql = format!(
-                "SELECT {INDEX_ROW_COLUMNS} FROM knowledge k
+                "SELECT {} FROM knowledge k
                  WHERE k.id IN ({}) AND k.state IN ('active', 'provisional')",
+                self.index_row_columns(),
                 id_placeholders(chunk.len())
             );
             let mut stmt = self.connection().prepare(&sql).map_err(sqlite_error)?;
@@ -390,5 +406,100 @@ mod tests {
             .load_dense_hit_rows(&["second-active".into()])
             .unwrap();
         assert_eq!(hits["second-active"].title, "title second-active");
+    }
+    #[test]
+    fn untagged_vectors_migrate_once_under_the_gemini_tag() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("memory.sqlite3");
+        let repo = KnowledgeRepository::open(&path).unwrap();
+        repo.insert_knowledge(&record("old-768")).unwrap();
+        repo.insert_knowledge(&record("old-2")).unwrap();
+        let v768: Vec<u8> = (0..768).flat_map(|_| 1.0_f32.to_le_bytes()).collect();
+        let v2: Vec<u8> = [1.0_f32, 0.0]
+            .iter()
+            .flat_map(|f| f.to_le_bytes())
+            .collect();
+        let conn = repo.connection();
+        conn.execute(
+            "UPDATE knowledge SET dense_vector = ?1 WHERE id = 'old-768'",
+            [&v768],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE knowledge SET dense_vector = ?1 WHERE id = 'old-2'",
+            [&v2],
+        )
+        .unwrap();
+        conn.execute("DELETE FROM schema_meta WHERE key = 'vectors_tagged'", [])
+            .unwrap();
+        drop(repo);
+
+        let repo = KnowledgeRepository::open(&path).unwrap();
+        let counts = repo.vector_tag_counts().unwrap();
+        assert!(counts.contains(&("gemini:models/gemini-embedding-001:768".to_string(), 1)));
+        assert!(counts.contains(&("legacy:unknown:2".to_string(), 1)));
+        // A second open does not copy again.
+        repo.connection()
+            .execute("DELETE FROM knowledge_vectors", [])
+            .unwrap();
+        drop(repo);
+        let repo = KnowledgeRepository::open(&path).unwrap();
+        assert!(repo.vector_tag_counts().unwrap().is_empty());
+    }
+
+    #[test]
+    fn vectors_of_other_tags_are_invisible() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("memory.sqlite3");
+        let mut repo = KnowledgeRepository::open(&path).unwrap();
+        repo.set_vector_tag(Some("gemini:m:2".into()));
+        repo.insert_knowledge(&record("a")).unwrap();
+        repo.store_dense_vector("a", &[1.0, 0.0]).unwrap();
+        repo.store_vector_for_tag("a", "gemma:m:2", &[0.0, 1.0])
+            .unwrap();
+
+        let mut gemma = KnowledgeRepository::open_reader(&path).unwrap();
+        gemma.set_vector_tag(Some("gemma:m:2".into()));
+        assert_eq!(gemma.load_dense_vector("a").unwrap(), Some(vec![0.0, 1.0]));
+        assert_eq!(repo.load_dense_vector("a").unwrap(), Some(vec![1.0, 0.0]));
+        let rows = gemma.load_record_index_rows().unwrap();
+        assert_eq!(rows[0].vector, Some(vec![0.0, 1.0]));
+
+        let mut none = KnowledgeRepository::open_reader(&path).unwrap();
+        none.set_vector_tag(None);
+        assert_eq!(none.load_dense_vector("a").unwrap(), None);
+        assert!(none.load_record_index_rows().unwrap()[0].vector.is_none());
+        assert!(none.store_dense_vector("a", &[1.0, 1.0]).is_err());
+
+        // Deleting a record drops its vectors.
+        repo.delete_knowledge("a").unwrap();
+        assert!(repo.vector_tag_counts().unwrap().is_empty());
+    }
+
+    #[test]
+    fn missing_vectors_list_serving_records_first_and_shrinks_as_stored() {
+        let dir = tempdir().unwrap();
+        let mut repo = KnowledgeRepository::open(&dir.path().join("memory.sqlite3")).unwrap();
+        repo.set_vector_tag(Some("gemma:m:1".into()));
+        repo.insert_knowledge(&record("archived")).unwrap();
+        repo.archive_record("archived", "test").unwrap();
+        repo.insert_knowledge(&record("serving")).unwrap();
+        let missing = repo.records_missing_vector("gemma:m:1", None, 10).unwrap();
+        let ids: Vec<&str> = missing.iter().map(|(id, _)| id.as_str()).collect();
+        assert_eq!(ids, vec!["serving", "archived"]);
+        assert_eq!(repo.vector_coverage("gemma:m:1").unwrap(), (1, 1));
+
+        repo.store_dense_vector("serving", &[1.0]).unwrap();
+        assert_eq!(
+            repo.count_records_missing_vector("gemma:m:1", None)
+                .unwrap(),
+            1
+        );
+        assert_eq!(repo.vector_coverage("gemma:m:1").unwrap(), (0, 1));
+        assert_eq!(
+            repo.count_records_missing_vector("gemma:m:1", Some("other"))
+                .unwrap(),
+            0
+        );
     }
 }

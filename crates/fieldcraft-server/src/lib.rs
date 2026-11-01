@@ -572,9 +572,48 @@ pub struct StatusResponse {
     pub total_records: usize,
     pub imports_queued: i64,
     pub rows: Vec<StatusRow>,
-    /// Whether this server can embed (Gemini key in env or secrets file).
-    /// `fieldcraft doctor` on a client reads it; older servers omit it.
+    /// Whether this server can embed now (kept for older `fieldcraft doctor`
+    /// clients; newer ones read `embedding`).
     pub embedding_key_configured: bool,
+    /// Provider, tag, mode (`dense` or `bm25-only`), readiness and vector
+    /// coverage. Absent on servers older than CH-0012.
+    pub embedding: EmbeddingStatus,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EmbeddingStatus {
+    #[serde(flatten)]
+    pub readiness: fieldcraft_retrieval::EmbeddingReadiness,
+    /// Stored vectors per tag (all tags, including ones no longer served).
+    pub vectors_by_tag: Vec<(String, i64)>,
+    /// Active/provisional records in the active tier.
+    pub serving_records: i64,
+    /// Of those, how many have no vector under the configured tag (served
+    /// by BM25 only until `fieldcraft reindex`).
+    pub serving_missing_vector: i64,
+    /// Embedding calls made by this process and their last outcome.
+    pub health: fieldcraft_retrieval::EmbeddingHealth,
+}
+
+/// Blocking: probes the provider and counts vectors on a read connection.
+fn embedding_status(readers: &readers::ReaderPool) -> EmbeddingStatus {
+    let readiness = fieldcraft_retrieval::embedding_readiness();
+    let counts = readers.with(|repo| {
+        let by_tag = repo.vector_tag_counts().unwrap_or_default();
+        let coverage = match readiness.tag.as_deref() {
+            Some(tag) => repo.vector_coverage(tag).unwrap_or((0, 0)),
+            None => (0, 0),
+        };
+        (by_tag, coverage)
+    });
+    let (vectors_by_tag, (missing, serving)) = counts.unwrap_or_default();
+    EmbeddingStatus {
+        readiness,
+        vectors_by_tag,
+        serving_records: serving,
+        serving_missing_vector: missing,
+        health: fieldcraft_retrieval::embedding_health(),
+    }
 }
 
 async fn status_handler(
@@ -585,6 +624,10 @@ async fn status_handler(
         &state,
         &params.project.unwrap_or_else(|| "global".to_string()),
     )?;
+    let readers = state.readers.clone();
+    let embedding = tokio::task::spawn_blocking(move || embedding_status(&readers))
+        .await
+        .map_err(|e| AppError::Internal(format!("embedding status task failed: {e}")))?;
     let repo = state
         .repo
         .lock()
@@ -629,11 +672,8 @@ async fn status_handler(
             total_records,
             imports_queued,
             rows,
-            embedding_key_configured: fieldcraft_core::secrets::lookup_any(&[
-                "GEMINI_API_KEY",
-                "GOOGLE_API_KEY",
-            ])
-            .is_some(),
+            embedding_key_configured: embedding.readiness.ready,
+            embedding,
         }),
     ))
 }
@@ -1072,7 +1112,12 @@ async fn search_lessons_handler(
             let min_cosine: f32 = std::env::var("FIELDCRAFT_RESURRECTION_COSINE")
                 .ok()
                 .and_then(|v| v.parse().ok())
-                .unwrap_or(0.85);
+                .unwrap_or_else(|| {
+                    fieldcraft_core::embedding::thresholds_for_tag(
+                        fieldcraft_core::embedding::active_tag().as_deref(),
+                    )
+                    .resurrection_min
+                });
             let threshold: i64 = std::env::var("FIELDCRAFT_RESURRECTION_THRESHOLD")
                 .ok()
                 .and_then(|v| v.parse().ok())
@@ -2544,6 +2589,15 @@ mod tests {
         assert_eq!(json["rows"][0]["state"], "active");
         assert_eq!(json["rows"][0]["count"], 1);
         assert_eq!(json["rows"].as_array().unwrap().len(), 1);
+        // Embedding mode is always stated (no silent BM25 fallback).
+        let embedding = &json["embedding"];
+        assert!(embedding["provider"].is_string(), "{embedding}");
+        assert!(
+            matches!(embedding["mode"].as_str(), Some("dense" | "bm25-only")),
+            "{embedding}"
+        );
+        assert!(embedding["ready"].is_boolean());
+        assert_eq!(json["embedding_key_configured"], embedding["ready"]);
     }
 
     #[tokio::test]

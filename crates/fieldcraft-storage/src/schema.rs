@@ -352,6 +352,9 @@ pub fn open_catalog(path: &Path) -> Result<Connection, TrError> {
          DROP TABLE IF EXISTS skill_retrieval_log;",
     )
     .map_err(sqlite_error)?;
+    conn.execute_batch(VECTOR_SCHEMA_SQL)
+        .map_err(sqlite_error)?;
+    migrate_untagged_vectors(&conn)?;
     conn.execute_batch(crate::record_index::RECORD_CHANGE_SCHEMA_SQL)
         .map_err(sqlite_error)?;
     merge_known_project_slug_split(&conn)?;
@@ -371,6 +374,62 @@ pub fn open_catalog(path: &Path) -> Result<Connection, TrError> {
     conn.execute_batch("INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('version', 'v5');")
         .map_err(sqlite_error)?;
     Ok(conn)
+}
+
+/// Tagged dense vectors: one row per (record, embedding model). See
+/// `fieldcraft_core::embedding`. `knowledge.dense_vector` is no longer read or
+/// written; it is left in place so the previous binary can still run.
+const VECTOR_SCHEMA_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS knowledge_vectors (
+    knowledge_id TEXT NOT NULL,
+    tag TEXT NOT NULL,
+    dims INTEGER NOT NULL,
+    vector BLOB NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (knowledge_id, tag)
+);
+CREATE INDEX IF NOT EXISTS idx_knowledge_vectors_tag ON knowledge_vectors(tag);
+-- A deleted record takes its vectors with it; a (re)inserted record starts
+-- without vectors, as a REPLACE used to reset knowledge.dense_vector.
+CREATE TRIGGER IF NOT EXISTS knowledge_vectors_drop_on_delete AFTER DELETE ON knowledge BEGIN
+    DELETE FROM knowledge_vectors WHERE knowledge_id = old.id;
+END;
+CREATE TRIGGER IF NOT EXISTS knowledge_vectors_drop_on_insert AFTER INSERT ON knowledge BEGIN
+    DELETE FROM knowledge_vectors WHERE knowledge_id = new.id;
+END;
+"#;
+
+/// One-time copy of the untagged `knowledge.dense_vector` column into
+/// `knowledge_vectors`. Those vectors were all made by Gemini at its default
+/// model (768 dims); any other length gets an `legacy:unknown:<dims>` tag that
+/// no provider produces, so it is never compared with anything.
+fn migrate_untagged_vectors(conn: &Connection) -> Result<(), TrError> {
+    let done: bool = conn
+        .query_row(
+            "SELECT EXISTS (SELECT 1 FROM schema_meta WHERE key = 'vectors_tagged')",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(sqlite_error)?;
+    if done {
+        return Ok(());
+    }
+    let gemini =
+        fieldcraft_core::embedding::legacy_tag_for_dims(fieldcraft_core::embedding::DEFAULT_DIMS);
+    let now = chrono::Utc::now().to_rfc3339();
+    run_migration(
+        conn,
+        &format!(
+            "INSERT OR IGNORE INTO knowledge_vectors (knowledge_id, tag, dims, vector, created_at)
+             SELECT id,
+                    CASE WHEN length(dense_vector) = {bytes} THEN '{gemini}'
+                         ELSE 'legacy:unknown:' || (length(dense_vector) / 4) END,
+                    length(dense_vector) / 4, dense_vector, '{now}'
+             FROM knowledge WHERE dense_vector IS NOT NULL AND length(dense_vector) >= 4;
+             INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('vectors_tagged', '{now}');",
+            bytes = fieldcraft_core::embedding::DEFAULT_DIMS * 4,
+        ),
+    )
 }
 
 fn merge_known_project_slug_split(conn: &Connection) -> Result<(), TrError> {
