@@ -593,6 +593,9 @@ pub struct EmbeddingStatus {
     pub serving_missing_vector: i64,
     /// Embedding calls made by this process and their last outcome.
     pub health: fieldcraft_retrieval::EmbeddingHealth,
+    /// Query-path counters since start: embedded, cache hits, and BM25
+    /// fallbacks by cause (deadline, error, shed).
+    pub query_path: fieldcraft_retrieval::query_embed::QueryPathStats,
 }
 
 /// Blocking: probes the provider and counts vectors on a read connection.
@@ -613,6 +616,7 @@ fn embedding_status(readers: &readers::ReaderPool) -> EmbeddingStatus {
         serving_records: serving,
         serving_missing_vector: missing,
         health: fieldcraft_retrieval::embedding_health(),
+        query_path: fieldcraft_retrieval::query_embed::query_path_stats(),
     }
 }
 
@@ -1032,16 +1036,20 @@ async fn search_lessons_handler(
     let start = std::time::Instant::now();
     let request_context = request.context.clone();
     let request_files = request.files.clone();
-    // Embed first, holding no database handle or lock; then rank on a pooled
-    // read-only connection. Both are blocking, so neither runs on an async
-    // worker.
+    // Embed first, holding no database handle or lock, within the query
+    // deadline (FIELDCRAFT_QUERY_DEADLINE_MS): a slow or failing provider
+    // means BM25 plus cached vectors, not a slow answer. Then rank on a pooled
+    // read-only connection, off the async workers.
     let response = {
-        let embed_request = request.clone();
-        let query_vector = tokio::task::spawn_blocking(move || {
-            fieldcraft_retrieval::retrieval::embed_query(&embed_request)
-        })
-        .await
-        .map_err(|e| AppError::Internal(format!("embedding task failed: {e}")))?;
+        use fieldcraft_retrieval::query_embed;
+        let (query_vector, outcome) = query_embed::embed_within(
+            fieldcraft_retrieval::build_query(&request),
+            query_embed::embed_budget(query_embed::RETRIEVAL_RESERVE),
+        )
+        .await;
+        if outcome.is_fallback() {
+            debug!(?outcome, "query embedding fell back to BM25");
+        }
         let readers = state.readers.clone();
         tokio::task::spawn_blocking(move || {
             readers.with(|repo| {

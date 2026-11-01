@@ -2777,7 +2777,18 @@ async fn query_lessons(
     if let Some(server_url) = fieldcraft_server_url() {
         let server_url = server_url.trim_end_matches('/').to_string();
         let token = get_or_enroll_token(&server_url).await?;
-        let client = reqwest::Client::new();
+        // Bounded: the server answers within its own deadline (800 ms by
+        // default), so a call this slow means the server is unreachable or
+        // stuck; fail instead of hanging the agent.
+        let timeout_ms = std::env::var("FIELDCRAFT_QUERY_TIMEOUT_MS")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .filter(|ms| *ms > 0)
+            .unwrap_or(5_000);
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_millis(timeout_ms))
+            .build()
+            .context("build HTTP client")?;
         let limit_param = limit.to_string();
         let tier_param = tier.as_str();
         let source_filter_param = source_filter.as_str();

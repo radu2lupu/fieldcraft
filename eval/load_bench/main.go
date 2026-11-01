@@ -324,20 +324,30 @@ func run(args []string) error {
 	return nil
 }
 
-// statusDiff reports numeric /status counters that changed during the run.
+// statusDiff reports numeric /status counters (nested ones as dotted keys)
+// that changed during the run.
 func statusDiff(before, after map[string]any) map[string]float64 {
 	out := map[string]float64{}
-	for k, av := range after {
-		a, ok := av.(float64)
-		if !ok {
-			continue
-		}
-		b, _ := before[k].(float64)
-		if a != b {
-			out[k] = a - b
+	b, a := map[string]float64{}, map[string]float64{}
+	flatten("", before, b)
+	flatten("", after, a)
+	for k, av := range a {
+		if av != b[k] {
+			out[k] = av - b[k]
 		}
 	}
 	return out
+}
+
+func flatten(prefix string, m map[string]any, out map[string]float64) {
+	for k, v := range m {
+		switch t := v.(type) {
+		case float64:
+			out[prefix+k] = t
+		case map[string]any:
+			flatten(prefix+k+".", t, out)
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------
