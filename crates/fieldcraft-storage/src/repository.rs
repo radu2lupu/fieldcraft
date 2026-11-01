@@ -1313,44 +1313,6 @@ impl KnowledgeRepository {
         Ok(candidates)
     }
 
-    /// Resurrection scan (L3): find plain ARCHIVED records whose dense vector
-    /// is at least `min_cosine` similar to `query_dense`, sorted best-first.
-    /// Scans only `tier='archive'` rows that are not superseded tombstones, so
-    /// replaced facts never re-enter serving through resurrection. Pair with
-    /// [`KnowledgeRepository::note_archive_match`] to auto-restore records that
-    /// keep matching real queries.
-    pub fn archive_matches(
-        &self,
-        query_dense: &[f32],
-        min_cosine: f32,
-    ) -> Result<Vec<(String, f32)>, TrError> {
-        let mut stmt = self
-            .conn
-            .prepare(
-                "SELECT id, dense_vector FROM knowledge
-                 WHERE tier = 'archive'
-                   AND state IN ('active', 'provisional')
-                   AND superseded_by IS NULL
-                   AND dense_vector IS NOT NULL",
-            )
-            .map_err(sqlite_error)?;
-        let rows = stmt
-            .query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
-            })
-            .map_err(sqlite_error)?;
-        let mut hits = Vec::new();
-        for row in rows {
-            let (id, blob) = row.map_err(sqlite_error)?;
-            let vec = blob_to_vector(&blob);
-            if let Some(sim) = cosine_similarity(query_dense, &vec).filter(|s| *s >= min_cosine) {
-                hits.push((id, sim));
-            }
-        }
-        hits.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        Ok(hits)
-    }
-
     /// Record that an archived record matched a live query (a resurrection
     /// signal), and auto-restore it once it has accumulated `threshold` such
     /// matches. Returns `true` iff this call restored the record. The counter
@@ -1971,72 +1933,6 @@ impl KnowledgeRepository {
         rows.collect::<Result<Vec<_>, _>>().map_err(sqlite_error)
     }
 
-    /// Load all dense vectors in the requested tier. Used by cue-first
-    /// retrieval where project identity is ranking evidence, not a hard
-    /// partition.
-    #[allow(clippy::type_complexity)]
-    pub fn load_all_vectors_unscoped(
-        &self,
-        tier: &str,
-    ) -> Result<
-        Vec<(
-            String,
-            String,
-            String,
-            String,
-            String,
-            f32,
-            String,
-            String,
-            Vec<f32>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            String,
-            String,
-        )>,
-        TrError,
-    > {
-        let mut stmt = self
-            .conn
-            .prepare(
-                "SELECT id, kind, title, retrieval_text, payload_json, confidence, state, created_at, dense_vector, phase, owner, session_date, source_json, project_id
-                 FROM knowledge
-                 WHERE state IN ('active', 'provisional')
-                   AND dense_vector IS NOT NULL
-                   AND (tier = ?1 OR tier IS NULL)",
-            )
-            .map_err(sqlite_error)?;
-        let rows = stmt
-            .query_map(params![tier], |row| {
-                let blob: Vec<u8> = row.get(8)?;
-                let vector: Vec<f32> = blob
-                    .as_chunks::<4>()
-                    .0
-                    .iter()
-                    .map(|chunk| f32::from_le_bytes(*chunk))
-                    .collect();
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, String>(4)?,
-                    row.get::<_, f64>(5)? as f32,
-                    row.get::<_, String>(6)?,
-                    row.get::<_, String>(7)?,
-                    vector,
-                    row.get::<_, Option<String>>(9)?,
-                    row.get::<_, Option<String>>(10)?,
-                    row.get::<_, Option<String>>(11)?,
-                    row.get::<_, String>(12)?,
-                    row.get::<_, String>(13)?,
-                ))
-            })
-            .map_err(sqlite_error)?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(sqlite_error)
-    }
-
     /// Batch-fetch cue bundles + effective confidence for the given record IDs
     /// in a single SQL round-trip. The canonical retrieval-time enrichment path.
     ///
@@ -2371,6 +2267,7 @@ impl KnowledgeRepository {
         query_terms: &[String],
         limit: usize,
         tier: &str,
+        legacy_candidates: &[(String, String)],
     ) -> Result<Vec<(String, f64)>, TrError> {
         if cues.is_empty() || query_terms.is_empty() {
             return Ok(vec![]);
@@ -2476,52 +2373,48 @@ impl KnowledgeRepository {
         // Compatibility for databases that have not been cue-backfilled yet:
         // admit legacy rows by their stored project_id only when no identity
         // cue row exists for that record. Backfill removes this path naturally.
-        let mut legacy_stmt = self
-            .conn
-            .prepare(
-                "SELECT k.id, k.project_id, k.title, k.retrieval_text
-                 FROM knowledge k
-                 WHERE k.state IN ('active', 'provisional')
-                   AND (k.tier = ?1 OR k.tier IS NULL)
-                   AND NOT EXISTS (
-                     SELECT 1 FROM cue_index c
-                     WHERE c.record_id = k.id AND c.dim_name = 'identity'
-                   )",
-            )
-            .map_err(sqlite_error)?;
-        let legacy_rows = legacy_stmt
-            .query_map(params![tier], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                ))
-            })
-            .map_err(sqlite_error)?;
-        for row in legacy_rows {
-            let (id, project_id, title, retrieval_text) = row.map_err(sqlite_error)?;
-            if seen.contains(&id) {
+        // The caller supplies those rows as `(id, project_id)` in scan order
+        // (state, rowid) from the record cache; only rows whose project can
+        // match are read from SQLite, for their text.
+        let mut project_scores: HashMap<&str, (String, f64)> = HashMap::new();
+        let mut admitted: Vec<(&str, &str)> = Vec::new();
+        for (id, project_id) in legacy_candidates {
+            if seen.contains(id) {
                 continue;
             }
-            let identity_norm = fieldcraft_core::cue_extract::normalize_identity(&project_id);
-            let identity_score = normalized_cues
-                .iter()
-                .map(|cue| identity_similarity(cue, &identity_norm))
-                .fold(0.0_f64, f64::max);
-            if identity_score == 0.0 {
+            let (_, identity_score) =
+                project_scores
+                    .entry(project_id.as_str())
+                    .or_insert_with(|| {
+                        let norm = fieldcraft_core::cue_extract::normalize_identity(project_id);
+                        let score = normalized_cues
+                            .iter()
+                            .map(|cue| identity_similarity(cue, &norm))
+                            .fold(0.0_f64, f64::max);
+                        (norm, score)
+                    });
+            if *identity_score == 0.0 {
                 continue;
             }
             seen.insert(id.clone());
+            admitted.push((id.as_str(), project_id.as_str()));
+        }
+        let admitted_ids: Vec<String> = admitted.iter().map(|(id, _)| id.to_string()).collect();
+        let texts = self.load_titles_and_texts(&admitted_ids)?;
+        for (id, project_id) in admitted {
+            let Some((title, retrieval_text)) = texts.get(id) else {
+                continue;
+            };
+            let (identity_norm, identity_score) = &project_scores[project_id];
             let haystack = format!("{} {}", title.to_lowercase(), retrieval_text.to_lowercase());
             let overlap = normalized_query_terms
                 .iter()
                 .filter(|(term, normalized)| {
-                    identity_similarity(normalized, &identity_norm) == 0.0
+                    identity_similarity(normalized, identity_norm) == 0.0
                         && haystack.contains(term.as_str())
                 })
                 .count() as f64;
-            scored.push((id, identity_score * 10.0 + overlap));
+            scored.push((id.to_string(), identity_score * 10.0 + overlap));
         }
 
         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
@@ -3029,7 +2922,7 @@ fn duplicate_score(
     (dense_score * 0.72) + (cue_score * 0.18) + (text_score * 0.10)
 }
 
-fn blob_to_vector(bytes: &[u8]) -> Vec<f32> {
+pub(crate) fn blob_to_vector(bytes: &[u8]) -> Vec<f32> {
     bytes
         .as_chunks::<4>()
         .0
@@ -3038,7 +2931,7 @@ fn blob_to_vector(bytes: &[u8]) -> Vec<f32> {
         .collect()
 }
 
-fn cosine_similarity(a: &[f32], b: &[f32]) -> Option<f32> {
+pub fn cosine_similarity(a: &[f32], b: &[f32]) -> Option<f32> {
     if a.is_empty() || a.len() != b.len() {
         return None;
     }
@@ -3913,6 +3806,55 @@ mod tests {
         assert_eq!(results_b[0].0, "fp-2");
     }
 
+    /// The legacy identity candidates as the old full scan selected them
+    /// (production gets them from the record cache).
+    fn legacy_identity_candidates(repo: &KnowledgeRepository, tier: &str) -> Vec<(String, String)> {
+        let mut stmt = repo
+            .connection()
+            .prepare(
+                "SELECT k.id, k.project_id FROM knowledge k
+                 WHERE k.state IN ('active', 'provisional')
+                   AND (k.tier = ?1 OR k.tier IS NULL)
+                   AND NOT EXISTS (
+                     SELECT 1 FROM cue_index c
+                     WHERE c.record_id = k.id AND c.dim_name = 'identity'
+                   )
+                 ORDER BY k.state, k.rowid",
+            )
+            .unwrap();
+        stmt.query_map([tier], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    }
+
+    #[test]
+    fn identity_cue_search_admits_legacy_rows_by_project_id() {
+        let dir = tempdir().unwrap();
+        let repo = KnowledgeRepository::open(&dir.path().join("memory.sqlite3")).unwrap();
+        for (id, project) in [("legacy-a", "field_notes"), ("legacy-b", "elsewhere")] {
+            let mut rec = make_record(id, project, KnowledgeKind::Claim);
+            rec.state = KnowledgeState::Active;
+            rec.retrieval_text = "meeting notes about budget".to_string();
+            repo.insert_knowledge(&rec).unwrap();
+        }
+        repo.connection()
+            .execute("DELETE FROM cue_index WHERE dim_name = 'identity'", [])
+            .unwrap();
+        let candidates = legacy_identity_candidates(&repo, "active");
+        assert_eq!(candidates.len(), 2);
+        let results = repo
+            .identity_cue_search(
+                &["field_notes".to_string()],
+                &["budget".to_string()],
+                10,
+                "active",
+                &candidates,
+            )
+            .unwrap();
+        assert_eq!(results, vec![("legacy-a".to_string(), 31.0)]);
+    }
+
     #[test]
     fn identity_cue_search_treats_project_names_as_fuzzy_cues() {
         let dir = tempdir().unwrap();
@@ -3948,6 +3890,7 @@ mod tests {
                 ],
                 10,
                 "active",
+                &legacy_identity_candidates(&repo, "active"),
             )
             .unwrap();
         let ids: Vec<&str> = results.iter().map(|(id, _)| id.as_str()).collect();
@@ -4726,42 +4669,6 @@ mod tests {
     }
 
     // Memory Lifecycle L3 (resurrection) + L4 (retrieval-induced forgetting) tests.
-
-    #[test]
-    fn archive_matches_finds_similar_archived_record_only() {
-        let dir = tempdir().unwrap();
-        let repo = KnowledgeRepository::open(&dir.path().join("memory.sqlite3")).unwrap();
-        let r = make_record("arch-1", "proj", KnowledgeKind::Claim);
-        repo.insert_knowledge(&r).unwrap();
-        repo.store_dense_vector("arch-1", &[1.0, 0.0, 0.0]).unwrap();
-        // An ACTIVE record with an identical vector must NOT be returned (scan
-        // is archive-only, the separate path).
-        let active = make_record("active-1", "proj", KnowledgeKind::Claim);
-        repo.insert_knowledge(&active).unwrap();
-        repo.store_dense_vector("active-1", &[1.0, 0.0, 0.0])
-            .unwrap();
-        // A SUPERSEDED archive with an identical vector is a provenance
-        // tombstone, not a resurrection candidate.
-        let superseded = make_record("sup-1", "proj", KnowledgeKind::Claim);
-        repo.insert_knowledge(&superseded).unwrap();
-        repo.store_dense_vector("sup-1", &[1.0, 0.0, 0.0]).unwrap();
-        repo.connection()
-            .execute(
-                "UPDATE knowledge
-                 SET state = 'superseded', tier = 'archive', superseded_by = 'active-1'
-                 WHERE id = 'sup-1'",
-                [],
-            )
-            .unwrap();
-        repo.archive_record("arch-1", "test archive").unwrap();
-
-        let hits = repo.archive_matches(&[0.99, 0.14, 0.0], 0.93).unwrap();
-        assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].0, "arch-1");
-
-        let none = repo.archive_matches(&[0.0, 0.0, 1.0], 0.93).unwrap();
-        assert!(none.is_empty());
-    }
 
     #[test]
     fn note_archive_match_restores_after_threshold() {

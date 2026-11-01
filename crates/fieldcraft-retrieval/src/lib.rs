@@ -1,7 +1,9 @@
 pub mod cue_match;
+pub mod record_cache;
 pub mod retrieval;
 pub mod sqlite_search;
 pub use cue_match::{MISMATCH_FLOOR, cue_match_factor};
+pub use record_cache::archive_matches;
 pub use retrieval::{
     LessonPreference, RetrievalRequest, RetrievalResponse, RetrievedLesson, TokenReceipt,
     build_embedding_text, build_query, index_knowledge_sqlite, retrieve,

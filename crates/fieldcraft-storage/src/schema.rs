@@ -352,6 +352,8 @@ pub fn open_catalog(path: &Path) -> Result<Connection, TrError> {
          DROP TABLE IF EXISTS skill_retrieval_log;",
     )
     .map_err(sqlite_error)?;
+    conn.execute_batch(crate::record_index::RECORD_CHANGE_SCHEMA_SQL)
+        .map_err(sqlite_error)?;
     merge_known_project_slug_split(&conn)?;
 
     // ----- v5 convergence: everything is a memory -----

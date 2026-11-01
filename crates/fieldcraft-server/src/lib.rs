@@ -43,6 +43,7 @@ pub struct TokenOwner(pub Option<String>);
 pub mod auth;
 pub mod error;
 pub mod memories;
+pub mod readers;
 
 // ---------------------------------------------------------------------------
 // Application state
@@ -59,6 +60,9 @@ pub mod memories;
 #[derive(Clone)]
 pub struct AppState {
     pub repo: Arc<Mutex<KnowledgeRepository>>,
+    /// Read-only connections for the query path, so queries never wait on
+    /// the write mutex or on each other.
+    pub readers: Arc<readers::ReaderPool>,
     pub memories: Arc<Mutex<MemoryRepository>>,
     pub source_sessions: Arc<Mutex<Connection>>,
     pub tokens: Arc<TokenStore>,
@@ -416,6 +420,13 @@ pub async fn merge_queue_loop(state: AppState) {
     use std::time::Duration;
 
     loop {
+        // Keep the vector-cache change log bounded; a cache further behind
+        // than this rebuilds from scratch.
+        if let Ok(repo) = state.repo.lock()
+            && let Err(e) = repo.prune_record_changes(100_000)
+        {
+            warn!("vector change log prune failed: {e}");
+        }
         match process_merge_queue_once(&state, 16) {
             Ok(processed) if processed > 0 => {
                 info!(processed, "processed lesson merge queue");
@@ -981,13 +992,30 @@ async fn search_lessons_handler(
     let start = std::time::Instant::now();
     let request_context = request.context.clone();
     let request_files = request.files.clone();
+    // Embed first, holding no database handle or lock; then rank on a pooled
+    // read-only connection. Both are blocking, so neither runs on an async
+    // worker.
     let response = {
-        let repo = state
-            .repo
-            .lock()
-            .map_err(|_| AppError::Internal("mutex poisoned".into()))?;
-        fieldcraft_retrieval::retrieval::retrieve_from_repository(request, &repo)
-            .map_err(AppError::from)?
+        let embed_request = request.clone();
+        let query_vector = tokio::task::spawn_blocking(move || {
+            fieldcraft_retrieval::retrieval::embed_query(&embed_request)
+        })
+        .await
+        .map_err(|e| AppError::Internal(format!("embedding task failed: {e}")))?;
+        let readers = state.readers.clone();
+        tokio::task::spawn_blocking(move || {
+            readers.with(|repo| {
+                fieldcraft_retrieval::retrieval::retrieve_with_query_vector(
+                    request,
+                    repo,
+                    query_vector,
+                )
+            })
+        })
+        .await
+        .map_err(|e| AppError::Internal(format!("retrieval task failed: {e}")))?
+        .map_err(AppError::from)?
+        .map_err(AppError::from)?
     };
     let latency_ms = start.elapsed().as_millis() as u64;
     let query_cue_bundle_json = response.query_cue_bundle_json.clone();
@@ -1049,11 +1077,29 @@ async fn search_lessons_handler(
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(3);
-            let Ok(repo) = res_state.repo.lock() else {
-                return;
+            // Scan on a read connection (cached vectors, no write lock); only
+            // the rare hits take the write mutex to be noted.
+            let readers = res_state.readers.clone();
+            let scan = tokio::task::spawn_blocking(move || {
+                readers.with(|repo| {
+                    fieldcraft_retrieval::archive_matches(repo, &query_dense, min_cosine)
+                })
+            })
+            .await;
+            let matches = match scan {
+                Ok(Ok(result)) => result,
+                Ok(Err(e)) => Err(e),
+                Err(e) => {
+                    warn!("archive match scan task failed: {e}");
+                    return;
+                }
             };
-            match repo.archive_matches(&query_dense, min_cosine) {
+            match matches {
+                Ok(hits) if hits.is_empty() => {}
                 Ok(hits) => {
+                    let Ok(repo) = res_state.repo.lock() else {
+                        return;
+                    };
                     for (id, sim) in hits.into_iter().take(3) {
                         match repo.note_archive_match(&id, threshold) {
                             Ok(true) => info!(%id, sim, "resurrected archived record"),
@@ -1957,6 +2003,7 @@ mod tests {
         let tokens = Arc::new(TokenStore::open(&dir.join("tokens.sqlite3")).unwrap());
         AppState {
             repo,
+            readers: Arc::new(readers::ReaderPool::new(knowledge_path.clone())),
             memories,
             source_sessions: Arc::new(Mutex::new(conn)),
             tokens,
@@ -2011,7 +2058,10 @@ mod tests {
     async fn enroll_rejects_remote_peer_without_secret_by_default() {
         let dir = tempdir().unwrap();
         let app = router(make_state(dir.path()));
-        let resp = app.oneshot(enroll_req([100, 64, 0, 7], None)).await.unwrap();
+        let resp = app
+            .oneshot(enroll_req([100, 64, 0, 7], None))
+            .await
+            .unwrap();
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
     }
 

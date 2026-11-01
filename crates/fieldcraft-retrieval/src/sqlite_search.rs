@@ -40,7 +40,7 @@ enum SearchScope {
     Unscoped,
 }
 
-fn parse_source(source_json: &str) -> KnowledgeSource {
+pub(crate) fn parse_source(source_json: &str) -> KnowledgeSource {
     serde_json::from_str(source_json).unwrap_or(KnowledgeSource::Manual)
 }
 
@@ -83,6 +83,9 @@ pub(crate) fn dense_search(
 
 /// Dense search across every record in the requested tier. Project identity is
 /// handled later as cue/ranking evidence instead of as a hard filter.
+///
+/// Ranks from the in-memory vector cache (same scan order and cosine as the
+/// old full-table read), then loads full rows only for the winners.
 pub(crate) fn dense_search_unscoped(
     repo: &KnowledgeRepository,
     query_vector: &[f32],
@@ -90,16 +93,55 @@ pub(crate) fn dense_search_unscoped(
     tier: &str,
     source_filter: SourceFilter,
 ) -> Result<Vec<SqliteHit>, TrError> {
-    dense_search_inner(
-        repo,
-        SearchScope::Unscoped,
-        query_vector,
-        limit,
-        tier,
-        source_filter,
-    )
+    let top: Vec<(String, f32, Vec<f32>, KnowledgeOrigin)> =
+        crate::record_cache::with_record_cache(repo, |cache| {
+            let mut scored: Vec<(&crate::record_cache::CachedRecord, &Vec<f32>, f32)> = cache
+                .iter()
+                .filter(|entry| entry.tier.as_deref().is_none_or(|t| t == tier))
+                .filter(|entry| source_filter.matches(entry.origin))
+                .filter_map(|entry| entry.vector.as_ref().map(|vector| (entry, vector)))
+                .filter(|(_, vector)| dimensions_match(query_vector, vector))
+                .map(|(entry, vector)| (entry, vector, cosine_similarity(query_vector, vector)))
+                .collect();
+            scored.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+            scored.truncate(limit);
+            scored
+                .into_iter()
+                .map(|(entry, vector, sim)| (entry.id.clone(), sim, vector.clone(), entry.origin))
+                .collect()
+        })?;
+    let ids: Vec<String> = top.iter().map(|(id, ..)| id.clone()).collect();
+    let mut rows = repo
+        .load_dense_hit_rows(&ids)
+        .map_err(|e| internal(format!("load_dense_hit_rows: {e}")))?;
+    Ok(top
+        .into_iter()
+        .filter_map(|(id, sim, vector, source_origin)| {
+            let row = rows.remove(&id)?;
+            Some(SqliteHit {
+                knowledge_id: row.id,
+                project_id: row.project_id,
+                kind: row.kind,
+                title: row.title,
+                retrieval_text: row.retrieval_text,
+                payload_json: row.payload_json,
+                confidence: row.confidence,
+                state: row.state,
+                created_at: row.created_at,
+                dense_similarity: sim,
+                bm25_score: 0.0,
+                dense_vector: vector,
+                phase: row.phase,
+                session_date: row.session_date,
+                owner: row.owner,
+                source_origin,
+                cue_bundle: None,
+            })
+        })
+        .collect())
 }
 
+#[cfg(test)]
 fn dense_search_inner(
     repo: &KnowledgeRepository,
     scope: SearchScope,
@@ -113,9 +155,7 @@ fn dense_search_inner(
         SearchScope::Project(project_id) => repo
             .load_all_vectors(&project_id, tier)
             .map_err(|e| internal(format!("load_all_vectors: {e}")))?,
-        SearchScope::Unscoped => repo
-            .load_all_vectors_unscoped(tier)
-            .map_err(|e| internal(format!("load_all_vectors_unscoped: {e}")))?,
+        SearchScope::Unscoped => unreachable!("unscoped dense search reads the vector cache"),
     };
     let mut scored: Vec<(SqliteHit, f32)> = all_records
         .into_iter()
@@ -203,8 +243,13 @@ pub(crate) fn identity_search_unscoped(
     source_filter: SourceFilter,
 ) -> Result<Vec<SqliteHit>, TrError> {
     let terms = query_terms(query);
+    let legacy = if identity_cues.is_empty() || terms.is_empty() {
+        Vec::new()
+    } else {
+        crate::record_cache::legacy_identity_candidates(repo, tier)?
+    };
     let ranked = repo
-        .identity_cue_search(identity_cues, &terms, limit, tier)
+        .identity_cue_search(identity_cues, &terms, limit, tier, &legacy)
         .map_err(|e| internal(format!("identity_cue_search: {e}")))?;
     let ids: Vec<String> = ranked.iter().map(|(id, _)| id.clone()).collect();
     let records = repo

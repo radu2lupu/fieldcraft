@@ -1282,9 +1282,36 @@ pub async fn retrieve(
     retrieve_from_repository(request, &repo)
 }
 
+/// Embed the request's query text. Needs no repository, so callers can run it
+/// without holding any database handle or lock. An empty vector means
+/// "no dense signal" and makes retrieval BM25-only.
+pub fn embed_query(request: &RetrievalRequest) -> Vec<f32> {
+    let query = build_query(request);
+    match encode_dense(std::slice::from_ref(&query)) {
+        Ok(vectors) => vectors.into_iter().next().unwrap_or_default(),
+        Err(err) => {
+            eprintln!(
+                "WARNING: dense query embedding failed; continuing sparse-only BM25 retrieval: {err}"
+            );
+            Vec::new()
+        }
+    }
+}
+
 pub fn retrieve_from_repository(
     request: RetrievalRequest,
     repo: &fieldcraft_storage::KnowledgeRepository,
+) -> Result<RetrievalResponse, TrError> {
+    let query_vector = embed_query(&request);
+    retrieve_with_query_vector(request, repo, query_vector)
+}
+
+/// Retrieval with an already-computed query vector (see [`embed_query`]).
+/// An empty `query_vector` runs the BM25-only path.
+pub fn retrieve_with_query_vector(
+    request: RetrievalRequest,
+    repo: &fieldcraft_storage::KnowledgeRepository,
+    query_vector: Vec<f32>,
 ) -> Result<RetrievalResponse, TrError> {
     let query = build_query(&request);
     let intent = detect_query_intent(&request);
@@ -1315,15 +1342,6 @@ pub fn retrieve_from_repository(
     // Project/app identity is noisy human language: it belongs in query/cue
     // evidence, not as a hard SQLite partition.
     let tier_str = request.tier.as_str();
-    let query_vector = match encode_dense(std::slice::from_ref(&query)) {
-        Ok(vectors) => vectors.into_iter().next().unwrap_or_default(),
-        Err(err) => {
-            eprintln!(
-                "WARNING: dense query embedding failed; continuing sparse-only BM25 retrieval: {err}"
-            );
-            Vec::new()
-        }
-    };
     let results = if query_vector.is_empty() {
         crate::sqlite_search::sparse_search_for_query_unscoped(
             repo,

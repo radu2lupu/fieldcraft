@@ -25,6 +25,7 @@ pub mod leiden;
 pub mod maintenance;
 pub mod memories;
 pub mod promote;
+pub mod record_index;
 pub mod repository;
 pub mod schema;
 pub mod skills;
@@ -47,6 +48,7 @@ pub use promote::{
     PromoteThresholds, eligibility_reason, list_promote_candidates, load_promote_candidate,
     render_promote_report, run_promote,
 };
+pub use record_index::{DenseHitRow, RecordIndexRow};
 pub use repository::{
     ArchiveCandidate, ClosedLoopStats, DERIVED_CLAIM_MAX_SOURCES, DERIVED_CLAIM_MIN_SOURCES,
     FeedbackOutcome, KnowledgeNeighbor, KnowledgeRepository, RetrievalLogEntry, RetrievalSignals,

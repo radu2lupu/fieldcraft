@@ -117,6 +117,9 @@ async fn main() -> anyhow::Result<()> {
 
     let state = AppState {
         repo,
+        readers: Arc::new(fieldcraft_server::readers::ReaderPool::new(
+            knowledge_path.clone(),
+        )),
         memories,
         source_sessions: Arc::new(Mutex::new(sessions_conn)),
         tokens,
