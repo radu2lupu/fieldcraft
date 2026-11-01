@@ -2473,8 +2473,9 @@ impl KnowledgeRepository {
         }
         cue_params.push(&tier);
 
-        let mut scored = Vec::new();
-        let mut seen = std::collections::HashSet::new();
+        // A record matches through several identity rows (aliases); it scores by
+        // its best row, independent of the order rows come back in.
+        let mut best: HashMap<String, f64> = HashMap::new();
         let mut stmt = self.conn.prepare(&sql).map_err(sqlite_error)?;
         let rows = stmt
             .query_map(rusqlite::params_from_iter(cue_params), |row| {
@@ -2496,9 +2497,6 @@ impl KnowledgeRepository {
             if identity_score == 0.0 {
                 continue;
             }
-            if !seen.insert(id.clone()) {
-                continue;
-            }
 
             let haystack = format!("{} {}", title.to_lowercase(), retrieval_text.to_lowercase());
             let overlap = normalized_query_terms
@@ -2508,8 +2506,12 @@ impl KnowledgeRepository {
                         && haystack.contains(term.as_str())
                 })
                 .count() as f64;
-            scored.push((id, identity_score * 10.0 + overlap));
+            let score = identity_score * 10.0 + overlap;
+            let entry = best.entry(id).or_insert(score);
+            *entry = entry.max(score);
         }
+        let mut seen: std::collections::HashSet<String> = best.keys().cloned().collect();
+        let mut scored: Vec<(String, f64)> = best.into_iter().collect();
 
         // Compatibility for databases that have not been cue-backfilled yet:
         // admit legacy rows by their stored project_id only when no identity
@@ -2558,7 +2560,14 @@ impl KnowledgeRepository {
             scored.push((id.to_string(), identity_score * 10.0 + overlap));
         }
 
-        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        // Scores are small integers plus a few identity levels, so ties are the
+        // norm; break them by id, not by the order SQLite happened to return
+        // rows in (which depends on the query plan).
+        scored.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.0.cmp(&b.0))
+        });
         scored.truncate(limit);
         Ok(scored)
     }
