@@ -507,7 +507,14 @@ pub fn rrf_fuse(ranked_lists: &[Vec<(String, f32)>], k: f32) -> Vec<(String, f32
         }
     }
     let mut fused: Vec<(String, f32)> = scores.into_iter().collect();
-    fused.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    // Ties (common: the same rank in different lists) break by id, not by
+    // HashMap iteration order, which is random per process and made the
+    // same query rank differently from one run to the next.
+    fused.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.0.cmp(&b.0))
+    });
     fused
 }
 
@@ -1696,6 +1703,15 @@ mod tests {
     // ------------------------------------------------------------------
     // RRF fusion tests
     // ------------------------------------------------------------------
+
+    #[test]
+    fn rrf_fuse_breaks_ties_by_id() {
+        let a = vec![("zeta".to_string(), 1.0), ("alpha".to_string(), 0.5)];
+        let b = vec![("alpha".to_string(), 1.0), ("zeta".to_string(), 0.5)];
+        let fused = rrf_fuse(&[a, b], 60.0);
+        assert_eq!(fused[0].0, "alpha");
+        assert_eq!(fused[1].0, "zeta");
+    }
 
     #[test]
     fn test_rrf_fuse_single_list() {
