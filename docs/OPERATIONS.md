@@ -156,6 +156,8 @@ Live on the reference shared-server deployment since 2026-07-01/02. Full design 
 | `FIELDCRAFT_ENROLL_SECRET` | unset | When set, `POST /enroll` requires it in `X-Fieldcraft-Enroll-Secret` from every caller. When unset, only loopback callers can enroll. Clients pass it via `install.sh --enroll-secret`. Existing tokens are unaffected. |
 | `FIELDCRAFT_ENROLL_OPEN` | unset | `1` allows unauthenticated enrollment from any address (pre-2026-09 behaviour). Fully trusted networks only. |
 | `FIELDCRAFT_SECRETS_FILE` | `<data_dir>/secrets.env` | Override the secrets file location. The environment always takes precedence over the file. |
+| `FIELDCRAFT_QUERY_DEADLINE_MS` | `800` | Server: `GET /lessons` answers within about this long. Query embedding gets the deadline minus 300 ms (at least 50 ms); past that the query runs BM25 plus cached record vectors, and the late embedding is cached for the next identical query. Counters: `/status` → `embedding.query_path`. |
+| `FIELDCRAFT_QUERY_TIMEOUT_MS` | `5000` | Client: HTTP timeout of `fieldcraft query` against a remote server (it had none). The prompt hook keeps its own 3 s fail-open budget. |
 | `FIELDCRAFT_EMBED_PROVIDER` | `gemini` | `gemma` (local EmbeddingGemma 2 sidecar), `gemini`, or `none` (BM25-only). Read from the environment, else `secrets.env`. An invalid value stops the server at start. |
 | `FIELDCRAFT_EMBED_GEMMA_URL` | `http://127.0.0.1:7778` | The local `llama-server --embeddings` the gemma provider calls. |
 | `FIELDCRAFT_EMBED_GEMMA_MODEL` | `embeddinggemma-2-Q8_0` | Alias the sidecar must serve (`--alias`); part of the vector tag. |

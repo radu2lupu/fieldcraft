@@ -297,6 +297,16 @@ parallel with each other and with the writer), also in `spawn_blocking`. Only th
 insert and the rare resurrection notes take `AppState::repo`, the single write connection behind a
 mutex. The L3 resurrection scan reads archived vectors from the record cache on a pooled reader.
 
+**Deadline and fallback (history: CH-0013).** The query embedding gets
+`FIELDCRAFT_QUERY_DEADLINE_MS` (800) minus 300 ms; past that, or on a provider error, the query
+runs BM25 plus the cached record vectors, and the late vector lands in a query-vector cache for the
+next identical query (`fieldcraft_retrieval::query_embed`; counters in `/status` →
+`embedding.query_path`). Identity admission reads only `cue_index` (predicates per distinct identity
+value) and takes admissibility and lowercased text from the record cache. SQLite memory statistics
+are off (`SQLITE_CONFIG_MEMSTATUS=0`, `fieldcraft_storage::schema::configure_sqlite`): with them on,
+every SQLite allocation takes one process-wide mutex and parallel readers serialize.
+
+
 The server's `search_lessons_handler` issues a fire-and-forget `log_retrieval()`
 call so HTTP-mode retrievals from remote clients are visible in `retrieval_log`
 on the server — closing the closed-loop telemetry path for multi-machine setups

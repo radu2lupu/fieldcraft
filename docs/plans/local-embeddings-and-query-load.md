@@ -3,8 +3,9 @@
 ## Status
 - Owner: Radu
 - Last updated: 2026-11-01
-- Current phase: implementation (stages 1-4 below), nothing deployed. Deploy is a separate,
-  owner-approved step (see "Deploy and rollback").
+- Current phase: stages 1-4 implemented and measured on a copy; nothing deployed. Open: the
+  Gemini-vs-Gemma replay (needs a Gemini key) before Gemma becomes the default; G3 at 16 concurrent.
+  Deploy is a separate, owner-approved step (see "Deploy and rollback").
 
 ## Problem
 
@@ -119,13 +120,87 @@ embeddings; ANN indexes (exact cosine over ~30k x 768 stays well under 10 ms); c
   stop and report before making Gemma the default. Thresholds recalibrated and reported.
 - Nothing on the production server changed.
 
+## Results (2026-11-01, copy of the production store, this laptop: 14 cores, shared with other work)
+
+Latency, `eval/load_bench`, stub Gemini with a fixed 150 ms delay standing in for the API
+(simulated, not Gemini), fresh copy per run, 100 requests at 1, 320 at 8 and 16, ms:
+
+| Concurrent | Before (8cf5ba5) p50 / p95 | After (e8e544d) p50 / p95 | Throughput before → after |
+|---|---|---|---|
+| 1 | 462 / 660 | 245 / 377 | 1.9 → 3.5 q/s |
+| 8 | 2,741 / 17,242 | 439 / 992 | 1.5 → 15.6 q/s |
+| 16 | 10,078 / 18,939 | 1,347 / 2,809 | 1.5 → 12.2 q/s |
+
+Gemma provider (real sidecar, Q8_0, b12032, Metal), final binary, Gemma-reindexed copy:
+1: 118 / 245; 8: 634 / 773; 16: 1,425 / 1,750 (p50 / p95 ms), 0 errors. Fallback at 16: 0 of 320
+(310 embedded in budget, 10 query-cache hits). With a provider forced to 1.5 s per call at 16: 225
+of 320 fell back (200 deadline, 25 shed), 95 cache hits, p95 1,387 ms. Server RSS 193-318 MB;
+sidecar footprint 222 MB, peak 372 MB.
+
+Gates:
+
+- G1 met: 500/500 identical (twice: stage-1 refactor, identity perf refactor), p95 at 16 down
+  18.9 s → 2.8 s.
+- G2 met: tag isolation and BM25-only tested; full Gemma reindex 32,946 records in 1,245 s, 0
+  skipped, resumable; a server on the same file answered throughout with 0 errors.
+- G3 not met as written (p95 <= 850 ms at 16): embedding is bounded (fallbacks above), but ranking
+  CPU (FTS5 BM25 and identity admission, ~100-200 ms per query) at 16 concurrent on this shared
+  laptop gives p95 1.75 s with Gemma. Not measured on the mini (M4, 10 cores).
+- G4 partly: Gemma vs BM25-only measured (CH-0014); Gemma vs Gemini not measured (no key), so
+  Gemma is not the default. Thresholds recalibrated (CH-0014).
+
 ## Deploy and rollback
 
-Written at the end of the work into this section and the final report; owner approves.
+For the owner to approve. Nothing below has been run on the Mac mini.
+
+Order (each step is safe to stop after; the server keeps answering throughout):
+
+1. **Back up** on the mini: `sqlite3 ~/.fieldcraft/memory.sqlite3 ".backup ~/.fieldcraft/backups/pre-embeddings-$(date +%Y%m%d).sqlite3"`
+   (~500 MB; `scripts/install-macos-launchagent.sh` also takes one).
+2. **Deploy the new binaries with the provider unchanged** (Gemini stays the default):
+   `git pull --ff-only && scripts/install-macos-launchagent.sh` (or `fieldcraft update`). On first
+   open the server migrates: creates `knowledge_vectors`, copies the 768-dim `dense_vector` blobs
+   under `gemini:models/gemini-embedding-001:768` (one transaction, ~100 MB, seconds), adds the
+   change-log triggers. `knowledge.dense_vector` is left untouched. Check: start-up line
+   `embeddings: ready`, `curl -s localhost:7777/health`, `fieldcraft doctor` (server-embeddings ok),
+   `/status` → `embedding.vectors_by_tag` shows the Gemini tag with ~31k rows.
+3. **Start the sidecar**: put `llama-server` (llama.cpp b12032 macOS arm64, or any build >= b11476)
+   and `embeddinggemma-2-Q8_0.gguf` (sha256 `2188ac1d…09135`) in `~/.fieldcraft/embedder/`,
+   install `install/launchd/com.fieldcraft.embedder.plist` (replace `__HOME__`), bootstrap it.
+   Check: `curl -s 127.0.0.1:7778/v1/models` lists `embeddinggemma-2-Q8_0`.
+4. **Build Gemma vectors** while Gemini keeps serving:
+   `FIELDCRAFT_EMBED_GEMMA_URL=http://127.0.0.1:7778 fieldcraft reindex --provider gemma`
+   on the mini (local catalog). ~33k records; ~21 min on the laptop under load, mini speed not
+   measured. Resumable: rerun after any interruption. Queries keep working (they read Gemini
+   vectors; WAL readers are not blocked).
+5. **Only if the stage-4 gate passes** (not yet: the Gemini arm needs a key, see Results):
+   add `export FIELDCRAFT_EMBED_PROVIDER=gemma` to `~/.fieldcraft/secrets.env`, rerun step 4 to
+   catch records written since, restart (`launchctl kickstart -k gui/$(id -u)/com.fieldcraft.server`).
+   Check: start-up line names `gemma:embeddinggemma-2-Q8_0:768`; `/status` → `embedding.ready`
+   true and `serving_missing_vector` ~0; `fieldcraft doctor`.
+6. Merge, RIF, dream and resurrection use `GEMMA_THRESHOLDS` (calibrated in CH-0014) once the
+   provider is gemma. The lifecycle loop keeps running with `FIELDCRAFT_LIFECYCLE_APPLY=1`; if you
+   want to watch the first Gemma passes before they archive, set it to 0 for a day.
+
+Rollback:
+
+- From step 5: remove the provider line (or set `gemini`), restart. Gemini vectors were never
+  modified; records written while on Gemma have Gemma vectors only, so run
+  `fieldcraft reindex --provider gemini` to fill them.
+- From step 2 (back to the old binary): reinstall the previous commit. The old binary reads
+  `knowledge.dense_vector`, which still holds every vector that existed at migration time; records
+  written after it have none there, and `fieldcraft reindex` (old binary, missing only) fills them.
+  The new tables and triggers are inert for the old binary, except that the change-log triggers
+  keep appending to `knowledge_vector_changes`; drop them if staying on the old binary:
+  `DROP TRIGGER knowledge_vector_change_insert; … _delete; … _update; cue_index_identity_change_insert; … _delete; knowledge_vectors_change_insert; … _update; … _delete;`.
+- Disk: both tags plus the change log grew the copy from 500 MB to 745 MB. Once Gemma serves and
+  Gemini is retired, deleting the Gemini rows and the unused `dense_vector` column, then `VACUUM`,
+  recovers it (separate, later step).
 
 ## Change log
 
-- 2026-11-01: plan written.
+- 2026-11-01: plan written. Stages 1-4 done (CH-0011..CH-0014). Added during stage 3: the
+  identity-admission and SQLite-lock work (load profile showed it), RRF and identity tie fixes.
 
 ## Direction (owner, 2026-11-01): shared memory and artifact backend
 

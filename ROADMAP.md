@@ -100,6 +100,9 @@ Done items are marked; the rest are ordered by priority within each group.
 - [x] Move the Gemini call out from under the repository mutex; cache vectors in memory (CH-0011:
       read-connection pool, trigger-invalidated record cache; RRF ties made deterministic).
 - [x] Pluggable embedding providers with model tagging (CH-0012).
+- [x] Hard query-path budget: `GET /lessons` embedding deadline with BM25 fallback (CH-0013).
+- [ ] Make EmbeddingGemma 2 the default provider: needs the Gemini-vs-Gemma replay (CH-0014; Gemma
+      beats BM25-only, Gemini arm not yet run).
 - LLM cue classifier for phase / user_state.
 - Trim the public CLI surface; split the 6k-line `main.rs`.
 
