@@ -96,7 +96,8 @@ Done items are marked; the rest are ordered by priority within each group.
 
 ### Longer term
 
-- Move the Gemini call out from under the repository mutex; cache vectors in memory.
+- [x] Move the Gemini call out from under the repository mutex; cache vectors in memory (CH-0011:
+      read-connection pool, trigger-invalidated record cache; RRF ties made deterministic).
 - Pluggable embedding providers with model tagging.
 - LLM cue classifier for phase / user_state.
 - Trim the public CLI surface; split the 6k-line `main.rs`.

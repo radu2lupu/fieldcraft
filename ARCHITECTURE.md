@@ -124,6 +124,7 @@ Migrations are **idempotent** — `run_migration()` handles `duplicate column` e
 | `skill_packages`, `skill_findings`, `skill_cards`, `skill_cards_fts`, `skill_retrieval_log` | Skill ingestion + retrieval (separate subsystem) |
 | `cue_index` | Inverted index from cue value to `knowledge_id` for fast exact-match lookup (history: CH-0002) |
 | `schema_meta` | Key-value (currently just `version`) |
+| `knowledge_vector_changes` | Trigger-fed log of record ids whose cached query fields changed; drives the in-memory record cache (history: CH-0011) |
 
 ### Key columns added across schema versions
 
@@ -145,7 +146,7 @@ The schema has evolved by additive migration:
 2. **Lesson → skill / AGENTS.md promotion is `--apply`-gated.** `fieldcraft promote` lists high-confirm `procedure`/`directive` workhorses by default and writes nothing. `--apply` requires `--id` (no bulk write, no hook/cron path). The original lesson is retained; provenance is a `knowledge_events` row with `event_type = lesson_promoted`. See [docs/promote-checklist.md](docs/promote-checklist.md).
 3. **Schema migrations must be idempotent.** Use `run_migration()`; never raw `execute_batch` on ALTER TABLE.
 4. **FTS5 mirroring is trigger-driven.** Don't write to `knowledge_fts` directly — INSERT/DELETE/UPDATE triggers on `knowledge` keep it in sync.
-5. **Dense vectors live alongside records.** No separate vector store. Migration from Qdrant happened 2026-04-01.
+. **The record cache is trigger-invalidated.** `fieldcraft_retrieval::record_cache` holds, per active or provisional record, the fields the dense and identity scans decide on (tier, state, superseded, source origin, project, identity-cue flag, vector). Triggers in `record_index.rs` log every write to those columns (and identity rows of `cue_index`) into `knowledge_vector_changes`; each query applies the logged ids. A query-path scan that reads a new `knowledge` column must add that column to the cache and to the update trigger (review-only rule; the cache tests cover the current columns). The server prunes the log to its newest 100,000 entries; a cache further behind rebuilds.
 
 ---
 
@@ -162,8 +163,8 @@ RetrievalRequest{ project_id, context, files, task, preferred_types, tier }
 2. build_query_cue_bundle(request)   → typed identity cue + deterministic domain/tool/file/symbol cues
 3. detect_query_intent(request)      → ActionOriented | KnowledgeOriented | General
 4. weights_for_intent(intent)        → 12-feature weight vector, dynamic on intent
-5. encode_dense([query])             → Gemini gemini-embedding-001, 768-dim vector (needs GEMINI_API_KEY)
-6. hybrid_search(repo, query, vec)   → unscoped dense + unscoped FTS5 BM25 + cue_index identity admission
+5. embed_query(request)              → Gemini gemini-embedding-001, 768-dim vector (needs GEMINI_API_KEY); needs no repository, so the server runs it outside any lock
+6. hybrid_search(repo, query, vec)   → unscoped dense (record cache) + unscoped FTS5 BM25 + cue_index identity admission (legacy rows from the record cache)
    ↓ RRF fusion
 7. compute_score per candidate       → weighted_sum of 12 features + weighted task grounding + cue-match adjustment
    ↓ phase boost (+0.25 same, -0.15 cross)
@@ -266,6 +267,14 @@ was removed (history: CH-0003) because MCP servers on client machines wrote
 to a local SQLite catalog regardless of `FIELDCRAFT_SERVER_URL`, creating a
 silent split-brain between client and server. The CLI-only design eliminates
 that class of bug.
+
+### Query path and concurrency (history: CH-0011)
+
+`GET /lessons` embeds the query in `spawn_blocking` holding no database handle, then ranks on a
+connection borrowed from `readers::ReaderPool` (read-only, no migrations; WAL lets readers run in
+parallel with each other and with the writer), also in `spawn_blocking`. Only the retrieval-log
+insert and the rare resurrection notes take `AppState::repo`, the single write connection behind a
+mutex. The L3 resurrection scan reads archived vectors from the record cache on a pooled reader.
 
 The server's `search_lessons_handler` issues a fire-and-forget `log_retrieval()`
 call so HTTP-mode retrievals from remote clients are visible in `retrieval_log`
