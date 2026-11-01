@@ -60,6 +60,9 @@ pub struct BatchResponse {
 /// The real implementation (`OpenAiBatchClient`) hits the live API.
 /// The mock (`MockOpenAiBatchClient`, `#[cfg(test)]`) records all interactions
 /// in memory so tests can run without any network access.
+// async_trait marks the generated methods #[must_use] although they already
+// return a #[must_use] boxed future; newer clippy flags that as double_must_use.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait OpenAiBatchApi: Send + Sync {
     /// Upload a JSONL file (`purpose=batch`) and return the resulting `file_id`.
