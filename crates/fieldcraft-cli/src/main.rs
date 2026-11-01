@@ -26,6 +26,7 @@ use std::sync::{LazyLock, Mutex};
 // ---------------------------------------------------------------------------
 
 mod onboarding;
+mod prompt_hook;
 
 #[derive(Parser)]
 #[command(
@@ -36,6 +37,12 @@ mod onboarding;
 struct Cli {
     #[command(subcommand)]
     command: Command,
+}
+
+#[derive(Subcommand)]
+enum HookCommand {
+    /// Claude Code UserPromptSubmit hook: gate with Jev, inject up to 3 new lessons
+    PromptSubmit,
 }
 
 #[derive(Subcommand)]
@@ -406,6 +413,11 @@ enum Command {
         #[arg(long, short = 'y')]
         yes: bool,
     },
+    /// Agent hook entry points (hook JSON on stdin; never fail the agent)
+    Hook {
+        #[command(subcommand)]
+        which: HookCommand,
+    },
     /// Check the install: config, secrets, server, agent hooks, instructions, distiller, and a query round trip
     Doctor {
         /// Print the checks as JSON
@@ -661,6 +673,13 @@ async fn async_main(cli: Cli) -> Result<()> {
         }
 
         Command::Setup { repo, yes } => onboarding::run_setup(repo, yes).await,
+
+        Command::Hook {
+            which: HookCommand::PromptSubmit,
+        } => {
+            prompt_hook::run_prompt_submit().await;
+            Ok(())
+        }
 
         Command::Doctor { json, offline } => onboarding::cmd_doctor(json, offline).await,
 
@@ -2684,6 +2703,13 @@ fn external_skill_record_id(
 // Command: query
 // ---------------------------------------------------------------------------
 
+/// One lesson returned by a query, local or remote.
+struct QueryHit {
+    id: String,
+    title: String,
+    content: String,
+}
+
 async fn cmd_query(
     project_id: &str,
     query_text: &str,
@@ -2693,6 +2719,40 @@ async fn cmd_query(
     source_filter: SourceFilter,
     tier: KnowledgeTier,
 ) -> Result<()> {
+    let hits = query_lessons(
+        project_id,
+        query_text,
+        session_id,
+        limit,
+        inner_voice,
+        source_filter,
+        tier,
+    )
+    .await?;
+    if hits.is_empty() {
+        println!("No lessons found for project '{project_id}'.");
+        return Ok(());
+    }
+    // Output clean lesson content — no display noise, agent-friendly
+    for hit in &hits {
+        println!("{}", hit.content);
+        println!();
+    }
+    Ok(())
+}
+
+/// The retrieval path shared by `fieldcraft query` and the prompt-submit hook:
+/// remote proxying via FIELDCRAFT_SERVER_URL, local retrieval, and the
+/// retrieval_log row tagged with the session id.
+async fn query_lessons(
+    project_id: &str,
+    query_text: &str,
+    session_id: Option<&str>,
+    limit: usize,
+    inner_voice: bool,
+    source_filter: SourceFilter,
+    tier: KnowledgeTier,
+) -> Result<Vec<QueryHit>> {
     let resolved_session_id = resolve_session_id(session_id);
 
     // HTTP mode: when FIELDCRAFT_SERVER_URL is set, route through the remote server.
@@ -2726,19 +2786,21 @@ async fn cmd_query(
             .json()
             .await
             .context("failed to parse lessons response")?;
-        if let Some(arr) = hits.as_array() {
-            if arr.is_empty() {
-                println!("No lessons found for project '{project_id}'.");
-                return Ok(());
-            }
-            for hit in arr {
-                if let Some(content) = hit["content"].as_str() {
-                    println!("{content}");
-                    println!();
-                }
-            }
-        }
-        return Ok(());
+        let out = hits
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|hit| {
+                        Some(QueryHit {
+                            id: hit["id"].as_str().unwrap_or_default().to_string(),
+                            title: hit["title"].as_str().unwrap_or_default().to_string(),
+                            content: hit["content"].as_str()?.to_string(),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        return Ok(out);
     }
 
     let start = std::time::Instant::now();
@@ -2810,18 +2872,14 @@ async fn cmd_query(
         });
     }
 
-    if shown.is_empty() {
-        println!("No lessons found for project '{project_id}'.");
-        return Ok(());
-    }
-
-    // Output clean lesson content — no display noise, agent-friendly
-    for m in &shown {
-        println!("{}", m.content);
-        println!();
-    }
-
-    Ok(())
+    Ok(shown
+        .into_iter()
+        .map(|m| QueryHit {
+            id: m.id,
+            title: m.title,
+            content: m.content,
+        })
+        .collect())
 }
 
 /// Inner voice sub-agent: LLM reasons about which candidate lessons are

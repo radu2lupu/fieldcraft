@@ -140,6 +140,7 @@ fieldcraft write --kind <k> <text>   Record a lesson (claim|procedure|episode|di
 fieldcraft feedback <id> --outcome   Record an outcome (confirmed|ignored|contradicted)
 fieldcraft distill-gate --transcript Cheap local friction score; the Stop hook skips quiet sessions
 fieldcraft trace-analyze --session   Emit outcome events from a session transcript (run by the Stop hook)
+fieldcraft hook prompt-submit        UserPromptSubmit hook: Jev-gated lesson injection (see ARCHITECTURE.md section 8)
 fieldcraft stats                     Closed-loop stats from the server
 fieldcraft session <id>              Per-session log with confidence deltas
 fieldcraft status                    Lesson store statistics

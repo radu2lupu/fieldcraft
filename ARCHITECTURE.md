@@ -305,6 +305,17 @@ There is no maintained benchmark suite. Two harnesses live under `eval/` (see [e
 
 This is the heart of the system: how a completed session turns into a confidence signal. The loop is **closed and recording** today, but runs in **shadow mode** — it observes outcomes without yet steering retrieval.
 
+### Per-prompt hook
+
+`fieldcraft hook prompt-submit` (`crates/fieldcraft-cli/src/prompt_hook.rs`) is an optional
+UserPromptSubmit hook. Jev answers one yes/no question (would earlier-session notes change what
+the engineer does with this prompt); `FIELDCRAFT_PROMPT_GATE` is `shadow` (default, always retrieve
+and record the probability), `enforce` (skip below `FIELDCRAFT_PROMPT_GATE_THRESHOLD`, default 0.4)
+or `off`. Retrieval reuses the `fieldcraft query` path, injects at most three lessons not yet seen
+in the session, and fails open on any error. Each call appends a line to
+`~/.fieldcraft/state/prompt-gate.jsonl`, joinable to `lesson_outcome_events` by session id. See
+CH-0010.
+
 ### Flow
 
 ```
