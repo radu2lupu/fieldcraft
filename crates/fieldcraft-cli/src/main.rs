@@ -3059,8 +3059,8 @@ async fn cmd_write(
                 action: summary.to_string(),
                 ..Default::default()
             };
-            let json = serde_json::to_string(&payload)
-                .context("failed to serialize directive payload")?;
+            let json =
+                serde_json::to_string(&payload).context("failed to serialize directive payload")?;
             (json, summary.to_string())
         }
         KnowledgeKind::Context => {

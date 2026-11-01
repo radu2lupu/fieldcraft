@@ -54,7 +54,9 @@ pub fn secrets_file_path() -> PathBuf {
         return PathBuf::from(dir).join(SECRETS_FILE_NAME);
     }
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    PathBuf::from(home).join(".fieldcraft").join(SECRETS_FILE_NAME)
+    PathBuf::from(home)
+        .join(".fieldcraft")
+        .join(SECRETS_FILE_NAME)
 }
 
 /// Environment first, then the secrets file. Empty values count as unset.
@@ -151,7 +153,10 @@ BAD LINE
   export   SPACED = value
 "#;
         let map = parse_secrets(text);
-        assert_eq!(map.get("GEMINI_API_KEY").map(String::as_str), Some("second"));
+        assert_eq!(
+            map.get("GEMINI_API_KEY").map(String::as_str),
+            Some("second")
+        );
         assert_eq!(map.get("OTHER").map(String::as_str), Some("with spaces"));
         assert_eq!(map.get("SPACED").map(String::as_str), Some("value"));
         assert!(!map.contains_key("EMPTY"));

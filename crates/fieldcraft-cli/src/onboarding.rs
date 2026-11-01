@@ -143,7 +143,8 @@ pub fn write_secret(path: &Path, key: &str, value: &str) -> Result<()> {
         .map(|raw| {
             let trimmed = raw.trim_start();
             let body = trimmed.strip_prefix("export ").unwrap_or(trimmed);
-            if !trimmed.starts_with('#') && body.split_once('=').is_some_and(|(k, _)| k.trim() == key)
+            if !trimmed.starts_with('#')
+                && body.split_once('=').is_some_and(|(k, _)| k.trim() == key)
             {
                 replaced = true;
                 line.clone()
@@ -153,7 +154,9 @@ pub fn write_secret(path: &Path, key: &str, value: &str) -> Result<()> {
         })
         .collect();
     if existing.is_empty() {
-        out.push("# Fieldcraft secrets. Owner-only. install.sh never rewrites this file.".to_string());
+        out.push(
+            "# Fieldcraft secrets. Owner-only. install.sh never rewrites this file.".to_string(),
+        );
     }
     if !replaced {
         out.push(line);
@@ -210,7 +213,10 @@ async fn test_gemini_key(key: &str) -> Result<usize> {
         .timeout(Duration::from_secs(20))
         .build()?;
     let resp = client
-        .post(format!("{}/{model}:embedContent", base.trim_end_matches('/')))
+        .post(format!(
+            "{}/{model}:embedContent",
+            base.trim_end_matches('/')
+        ))
         .header("x-goog-api-key", key)
         .json(&serde_json::json!({
             "model": model,
@@ -284,8 +290,16 @@ impl DoctorReport {
             };
             println!("  [{tag}] {:<18} {}", check.name, check.detail);
         }
-        let fails = self.checks.iter().filter(|c| c.level == Level::Fail).count();
-        let warns = self.checks.iter().filter(|c| c.level == Level::Warn).count();
+        let fails = self
+            .checks
+            .iter()
+            .filter(|c| c.level == Level::Fail)
+            .count();
+        let warns = self
+            .checks
+            .iter()
+            .filter(|c| c.level == Level::Warn)
+            .count();
         println!();
         if fails == 0 {
             println!("All checks passed ({warns} warning(s)).");
@@ -344,7 +358,9 @@ pub async fn run_doctor(offline: bool) -> DoctorReport {
         );
     } else {
         let detail = match &mode {
-            Mode::NoServer => "no server URL configured; commands use the local catalog".to_string(),
+            Mode::NoServer => {
+                "no server URL configured; commands use the local catalog".to_string()
+            }
             Mode::LocalService(url) => format!("local service at {url}"),
             Mode::Remote(url) => format!("shared server at {url}"),
         };
@@ -353,7 +369,11 @@ pub async fn run_doctor(offline: bool) -> DoctorReport {
     let token = fieldcraft_auth_token();
     match (&mode, &token) {
         (Mode::NoServer, _) => {}
-        (_, Some(_)) => report.push("auth-token", Level::Ok, "token present in ~/.fieldcraft/env"),
+        (_, Some(_)) => report.push(
+            "auth-token",
+            Level::Ok,
+            "token present in ~/.fieldcraft/env",
+        ),
         (_, None) => report.push(
             "auth-token",
             Level::Fail,
@@ -368,9 +388,16 @@ pub async fn run_doctor(offline: bool) -> DoctorReport {
             Some(true) => report.push(
                 "secrets-file",
                 Level::Warn,
-                format!("{} is readable by others; chmod 600", secrets_path.display()),
+                format!(
+                    "{} is readable by others; chmod 600",
+                    secrets_path.display()
+                ),
             ),
-            _ => report.push("secrets-file", Level::Ok, secrets_path.display().to_string()),
+            _ => report.push(
+                "secrets-file",
+                Level::Ok,
+                secrets_path.display().to_string(),
+            ),
         }
     } else {
         report.push(
@@ -409,7 +436,10 @@ pub async fn run_doctor(offline: bool) -> DoctorReport {
             Ok(Ok(Ok(vectors))) => report.push(
                 "embedding-call",
                 Level::Ok,
-                format!("gemini answered ({} dims)", vectors.first().map_or(0, Vec::len)),
+                format!(
+                    "gemini answered ({} dims)",
+                    vectors.first().map_or(0, Vec::len)
+                ),
             ),
             Ok(Ok(Err(err))) => report.push("embedding-call", Level::Fail, err),
             Ok(Err(err)) => report.push("embedding-call", Level::Fail, err.to_string()),
@@ -470,7 +500,10 @@ pub async fn run_doctor(offline: bool) -> DoctorReport {
             Some(_) => report.push(
                 &name,
                 Level::Fail,
-                format!("{} lacks the fieldcraft hooks; rerun install", config.display()),
+                format!(
+                    "{} lacks the fieldcraft hooks; rerun install",
+                    config.display()
+                ),
             ),
             None => report.push(
                 &name,
@@ -489,7 +522,10 @@ pub async fn run_doctor(offline: bool) -> DoctorReport {
             report.push(
                 &name,
                 Level::Fail,
-                format!("{} has no fieldcraft block; rerun install", instructions.display()),
+                format!(
+                    "{} has no fieldcraft block; rerun install",
+                    instructions.display()
+                ),
             );
         }
     }
@@ -545,7 +581,11 @@ async fn check_server(report: &mut DoctorReport, url: &str, token: Option<&str>)
             report.push("server", Level::Ok, format!("{url}/health ok"))
         }
         Ok(resp) => {
-            report.push("server", Level::Fail, format!("{url}/health returned {}", resp.status()));
+            report.push(
+                "server",
+                Level::Fail,
+                format!("{url}/health returned {}", resp.status()),
+            );
             return;
         }
         Err(err) => {
@@ -565,8 +605,15 @@ async fn check_server(report: &mut DoctorReport, url: &str, token: Option<&str>)
         Ok(resp) if resp.status().is_success() => {
             report.push("server-auth", Level::Ok, "token accepted by /status");
             let body: serde_json::Value = resp.json().await.unwrap_or_default();
-            match body.get("embedding_key_configured").and_then(|v| v.as_bool()) {
-                Some(true) => report.push("server-embeddings", Level::Ok, "server has an embedding key"),
+            match body
+                .get("embedding_key_configured")
+                .and_then(|v| v.as_bool())
+            {
+                Some(true) => report.push(
+                    "server-embeddings",
+                    Level::Ok,
+                    "server has an embedding key",
+                ),
                 Some(false) => report.push(
                     "server-embeddings",
                     Level::Fail,
@@ -624,7 +671,11 @@ async fn check_query_round_trip(report: &mut DoctorReport) {
             );
         }
         Ok(Err(err)) => report.push("query", Level::Fail, err.to_string()),
-        Err(_) => report.push("query", Level::Fail, "`fieldcraft query` timed out after 45s"),
+        Err(_) => report.push(
+            "query",
+            Level::Fail,
+            "`fieldcraft query` timed out after 45s",
+        ),
     }
 }
 
@@ -736,7 +787,9 @@ pub async fn run_setup(repo: Option<PathBuf>, yes: bool) -> Result<()> {
     println!("Fieldcraft setup");
     println!("================");
     println!("Memory for coding agents that keeps score. This wizard configures where lessons are");
-    println!("stored, the embedding key, the background distiller, and the agent hooks, then checks");
+    println!(
+        "stored, the embedding key, the background distiller, and the agent hooks, then checks"
+    );
     println!("that everything works. Re-run it any time; it is safe on an existing install.");
     println!();
     let agents = detect_agents(&home);
@@ -792,7 +845,9 @@ pub async fn run_setup(repo: Option<PathBuf>, yes: bool) -> Result<()> {
             auth_token = fieldcraft_auth_token();
         }
         if auth_token.is_none() {
-            println!("  New machines enroll with the server's FIELDCRAFT_ENROLL_SECRET (ask its admin),");
+            println!(
+                "  New machines enroll with the server's FIELDCRAFT_ENROLL_SECRET (ask its admin),"
+            );
             println!("  or paste a token the admin issued.");
             let secret = ui.secret("Enrollment secret (Enter to skip)")?;
             if secret.is_empty() {
@@ -804,7 +859,9 @@ pub async fn run_setup(repo: Option<PathBuf>, yes: bool) -> Result<()> {
                 enroll_secret = Some(secret);
             }
             if auth_token.is_none() && enroll_secret.is_none() {
-                println!("  Continuing without credentials; enrollment will only work from the server itself.");
+                println!(
+                    "  Continuing without credentials; enrollment will only work from the server itself."
+                );
             }
         }
         StoreChoice::Remote {
@@ -838,7 +895,10 @@ pub async fn run_setup(repo: Option<PathBuf>, yes: bool) -> Result<()> {
             let key = ui.secret("Gemini API key (Enter to skip)")?;
             if key.is_empty() {
                 if existing_key.is_none() && !remote {
-                    println!("  Skipped. Add it later to {} as `export GEMINI_API_KEY=...`", secrets_path.display());
+                    println!(
+                        "  Skipped. Add it later to {} as `export GEMINI_API_KEY=...`",
+                        secrets_path.display()
+                    );
                 }
                 break;
             }
@@ -869,7 +929,9 @@ pub async fn run_setup(repo: Option<PathBuf>, yes: bool) -> Result<()> {
         .copied()
         .filter(|d| *d == "none" || on_path(d))
         .collect();
-    println!("Background distiller: after a session with friction (interrupts, failures, corrections)");
+    println!(
+        "Background distiller: after a session with friction (interrupts, failures, corrections)"
+    );
     println!("a coding-agent CLI can review the transcript and write at most one lesson. It runs");
     println!("non-interactively with approvals bypassed, so transcript text can steer it. `none`");
     println!("keeps everything else working; you can still write lessons yourself.");
@@ -887,14 +949,21 @@ pub async fn run_setup(repo: Option<PathBuf>, yes: bool) -> Result<()> {
         .position(|d| *d == current)
         .map(|i| i + 1)
         .unwrap_or(1);
-    let distiller = available[ui.choose("Distiller?", &label_refs, default_distiller)? - 1].to_string();
+    let distiller =
+        available[ui.choose("Distiller?", &label_refs, default_distiller)? - 1].to_string();
     println!();
 
     // 4. Summary and install.
     println!("Plan:");
     match &store {
-        StoreChoice::Local => println!("  store:      local service on 127.0.0.1:7777, data in ~/.fieldcraft/"),
-        StoreChoice::Remote { url, enroll_secret, auth_token } => {
+        StoreChoice::Local => {
+            println!("  store:      local service on 127.0.0.1:7777, data in ~/.fieldcraft/")
+        }
+        StoreChoice::Remote {
+            url,
+            enroll_secret,
+            auth_token,
+        } => {
             let cred = if auth_token.is_some() {
                 "existing token"
             } else if enroll_secret.is_some() {
@@ -916,8 +985,17 @@ pub async fn run_setup(repo: Option<PathBuf>, yes: bool) -> Result<()> {
         }
     );
     println!("  distiller:  {distiller}");
-    println!("  agents:     hooks and instructions for Claude Code, Codex{}", if agents.contains(&Agent::Grok) { ", Grok" } else { "" });
-    println!("  then:       run install.sh for the service, token and hooks, and `fieldcraft doctor`");
+    println!(
+        "  agents:     hooks and instructions for Claude Code, Codex{}",
+        if agents.contains(&Agent::Grok) {
+            ", Grok"
+        } else {
+            ""
+        }
+    );
+    println!(
+        "  then:       run install.sh for the service, token and hooks, and `fieldcraft doctor`"
+    );
     if !ui.confirm("Proceed?", true)? {
         println!("Nothing changed.");
         return Ok(());
@@ -954,8 +1032,12 @@ pub async fn run_setup(repo: Option<PathBuf>, yes: bool) -> Result<()> {
     let report = run_doctor(false).await;
     report.print();
     println!();
-    println!("Next: start a new Claude Code / Codex / Grok session; the SessionStart hook will remind");
-    println!("the agent to run `fieldcraft query`. Try it yourself: fieldcraft query \"<what you are about to do>\"");
+    println!(
+        "Next: start a new Claude Code / Codex / Grok session; the SessionStart hook will remind"
+    );
+    println!(
+        "the agent to run `fieldcraft query`. Try it yourself: fieldcraft query \"<what you are about to do>\""
+    );
     println!("Re-check any time with `fieldcraft doctor`.");
     if report.failed() {
         anyhow::bail!("setup finished but the doctor found failing checks (see above)");
@@ -990,7 +1072,10 @@ mod tests {
         assert!(hooks_config_has(&json, "session-start-query.sh"));
         assert!(hooks_config_has(&json, "stop-feedback.sh"));
         assert!(!hooks_config_has(&json, "other.sh"));
-        assert!(!hooks_config_has(&serde_json::json!({}), "stop-feedback.sh"));
+        assert!(!hooks_config_has(
+            &serde_json::json!({}),
+            "stop-feedback.sh"
+        ));
     }
 
     #[test]
@@ -1025,7 +1110,10 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+            assert_eq!(
+                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
         }
     }
 
