@@ -118,6 +118,8 @@ embeddings; ANN indexes (exact cosine over ~30k x 768 stays well under 10 ms); c
 - G3: p95 <= deadline + 50 ms at 16 concurrent; fallback rate reported.
 - G4: Gemma MRR@10 not below Gemini beyond the bootstrap 95% CI of the paired difference; else
   stop and report before making Gemma the default. Thresholds recalibrated and reported.
+  Waived by the owner on 2026-11-04 ("Gemma is the one we keep"); never measured. Gemma vs BM25 stands
+  at MRR@10 0.429 vs 0.402 (CH-0014).
 - Nothing on the production server changed.
 
 ## Results (2026-11-01, copy of the production store, this laptop: 14 cores, shared with other work)
@@ -173,7 +175,7 @@ Order (each step is safe to stop after; the server keeps answering throughout):
    on the mini (local catalog). ~33k records; ~21 min on the laptop under load, mini speed not
    measured. Resumable: rerun after any interruption. Queries keep working (they read Gemini
    vectors; WAL readers are not blocked).
-5. **Only if the stage-4 gate passes** (not yet: the Gemini arm needs a key, see Results):
+5. **Owner decision made (G4 waived 2026-11-04); needs the owner's go for the production switch:**
    add `export FIELDCRAFT_EMBED_PROVIDER=gemma` to `~/.fieldcraft/secrets.env`, rerun step 4 to
    catch records written since, restart (`launchctl kickstart -k gui/$(id -u)/com.fieldcraft.server`).
    Check: start-up line names `gemma:embeddinggemma-2-Q8_0:768`; `/status` → `embedding.ready`

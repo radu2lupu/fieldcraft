@@ -1,0 +1,5 @@
+# Run output and scratch data (per-query rows, caches, .mv2 files); never committed.
+/out/
+/target/
+*.mv2
+*.jsonl

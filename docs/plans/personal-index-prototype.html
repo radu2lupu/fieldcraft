@@ -1,0 +1,388 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Fieldcraft nexus — user journey prototype</title>
+<style>
+:root{--fg:var(--foreground,#1d1d1f);--mf:var(--muted-foreground,#6e6e73);--bd:var(--border,#d2d2d7);--pr:var(--primary,#0071e3);--pf:var(--primary-foreground,#fff);--sc:var(--secondary,#f2f2f7);--r:var(--radius,10px);--sys:-apple-system,"SF Pro Text",BlinkMacSystemFont,system-ui,"Helvetica Neue",sans-serif;--acc:#0a7aff}
+*{box-sizing:border-box}
+body{margin:0;font-family:var(--font-sans,var(--sys));font-size:14px;line-height:1.45;color:var(--fg)}
+h1{font-size:19px;margin:0 0 4px}
+.lead{color:var(--mf);margin:0 0 14px}
+.steps{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px}
+.steps button,.pbtn{font:inherit;font-size:13px;border:1px solid var(--bd);background:var(--sc);color:var(--fg);border-radius:999px;padding:5px 11px;cursor:pointer}
+.steps button[aria-selected=true],.pbtn.pri{background:var(--pr);color:var(--pf);border-color:var(--pr)}
+.scene{display:none}.scene.on{display:block}
+.story{margin:0 0 10px}
+.flow{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:12px;font-size:12.5px}
+.flow span{background:var(--sc);border:1px solid var(--bd);border-radius:8px;padding:5px 9px}
+.flow b{color:var(--mf);font-weight:400}
+.note{font-size:12.5px;color:var(--mf);margin:8px 0 0}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin:12px 0 8px}
+.chips button{font:inherit;font-size:12px;border:1px dashed var(--bd);background:transparent;color:var(--fg);border-radius:6px;padding:3px 8px;cursor:pointer}
+.toggles{display:flex;flex-wrap:wrap;gap:16px;font-size:13px}
+.toggles input{accent-color:var(--pr)}
+/* desktop + mac surfaces */
+.desk{position:relative;padding:16px;border-radius:14px;overflow:hidden;font-family:var(--sys);color:#1d1d1f;background:radial-gradient(90% 70% at 8% 0%,#ffb27a 0,rgba(255,178,122,0) 60%),radial-gradient(80% 80% at 100% 10%,#b58cff 0,rgba(181,140,255,0) 60%),radial-gradient(110% 90% at 40% 110%,#2f8cff 0,rgba(47,140,255,0) 70%),linear-gradient(165deg,#6f7ff0,#2b3f9c)}
+.desk.ctr{display:flex;justify-content:center}
+.menu{display:flex;gap:16px;align-items:center;margin:-16px -16px 16px;padding:4px 14px;font-size:12px;color:#fff;background:rgba(255,255,255,.16);-webkit-backdrop-filter:blur(20px);backdrop-filter:blur(20px)}
+.menu b{font-weight:700}.menu .sp{flex:1}
+.share{background:#30d158;color:#fff;border-radius:5px;padding:0 7px;font-weight:600}
+.mw{border-radius:12px;overflow:hidden;background:rgba(244,244,247,.8);-webkit-backdrop-filter:blur(30px) saturate(1.8);backdrop-filter:blur(30px) saturate(1.8);box-shadow:0 0 0 .5px rgba(0,0,0,.28),0 20px 50px rgba(0,0,0,.35);font-size:13px}
+.tb{display:flex;align-items:center;gap:10px;height:48px;padding:0 14px;border-bottom:.5px solid rgba(0,0,0,.12);background:#fafafa}
+.tb .ttl{font-weight:600;font-size:13.5px}.tb .sub{color:#86868b;font-size:11.5px}
+.tl{display:flex;gap:8px;flex:none}.tl i{width:12px;height:12px;border-radius:50%;background:#ff5f57;box-shadow:inset 0 0 0 .5px rgba(0,0,0,.18)}.tl i+i{background:#febc2e}.tl i+i+i{background:#28c840}
+.split{display:grid;grid-template-columns:168px 1fr}
+.split3{display:grid;grid-template-columns:150px 200px 1fr}
+.sb{padding:14px 8px;min-width:0}.sb .tl{margin:0 6px 18px}
+.sh{font-size:11px;font-weight:600;color:#8a8a8e;padding:10px 8px 3px}
+.si{display:flex;align-items:center;gap:8px;padding:4px 8px;border-radius:7px;white-space:nowrap;overflow:hidden}
+.si.on{background:rgba(0,0,0,.09);font-weight:500}.si .n{margin-left:auto;color:#8a8a8e;font-size:11.5px}
+.main{background:#fff;min-width:0;border-left:.5px solid rgba(0,0,0,.1)}
+.ic{display:inline-flex;align-items:center;justify-content:center;flex:none;box-shadow:inset 0 0 0 .5px rgba(0,0,0,.12),0 1px 2px rgba(0,0,0,.15);color:#fff;font-weight:600}
+.ic svg{fill:none;stroke:#fff;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.mb{font:inherit;font-size:12.5px;border:0;border-radius:7px;padding:4px 11px;background:#fff;color:#1d1d1f;box-shadow:0 0 0 .5px rgba(0,0,0,.2),0 1px 1.5px rgba(0,0,0,.1);cursor:default}
+.mb.pri{background:var(--acc);color:#fff;box-shadow:none}.mb.red{color:#e5372c}
+.dim{color:#86868b}.grn{color:#1f9d4c}.red{color:#e5372c}
+/* IWT browser */
+.url{flex:1;display:flex;align-items:center;justify-content:center;gap:6px;height:30px;border-radius:999px;background:rgba(0,0,0,.055);color:#3a3a3c;font-size:12.5px}
+.chev{color:#8a8a8e;font-size:17px;letter-spacing:8px}
+.page{padding:22px 24px 64px;background:#fff}
+.plans{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:12px}
+.plan{border:1px solid #e5e5ea;border-radius:12px;padding:12px}.plan b{display:block;font-size:20px;margin:4px 0}
+.plan.hl{border-color:#5856d6;box-shadow:0 0 0 1px #5856d6}
+.toast{position:absolute;left:50%;transform:translateX(-50%);bottom:44px;display:flex;gap:10px;align-items:center;white-space:nowrap;background:rgba(40,40,44,.86);color:#fff;-webkit-backdrop-filter:blur(20px);backdrop-filter:blur(20px);border-radius:999px;padding:7px 14px;font-size:12.5px;box-shadow:0 8px 24px rgba(0,0,0,.3)}
+[hidden]{display:none!important}.toast a{color:#64b5ff;cursor:pointer;font-weight:600}
+/* mail + hc */
+.ml{border-left:.5px solid rgba(0,0,0,.1);background:#fff;min-width:0}
+.mr{padding:9px 12px;border-bottom:.5px solid #e5e5ea}.mr div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mr .h{display:flex;justify-content:space-between;gap:6px}.mr .p{color:#86868b;font-size:12px}
+.mr.on{background:var(--acc);color:#fff;border-radius:8px;margin:4px 6px;border:0}.mr.on .p,.mr.on .dim{color:rgba(255,255,255,.8)}
+.rd{padding:16px 18px}.who{display:flex;gap:10px;align-items:center;padding-bottom:10px;border-bottom:.5px solid #e5e5ea;margin-bottom:10px}
+.att{display:inline-flex;gap:8px;align-items:center;border:.5px solid #d1d1d6;border-radius:9px;padding:6px 10px;margin-top:6px}
+.msg{display:flex;gap:10px;padding:10px 16px}.msg .bd{flex:1;min-width:0}
+.card{display:flex;gap:10px;align-items:center;border:.5px solid #d1d1d6;border-radius:10px;padding:9px 11px;margin-top:6px;background:#fbfbfd}
+.compose{margin:8px 16px 14px;border-radius:999px;border:.5px solid #d1d1d6;padding:7px 14px;color:#a1a1a6}
+.vb{display:inline-block;font-size:10.5px;border-radius:999px;padding:0 6px;background:rgba(10,122,255,.12);color:#0a63d6;font-weight:500;vertical-align:1px}
+/* terminal */
+.term{background:rgba(28,28,30,.92);color:#e5e5ea}.term .tb{background:#2c2c2e;border-color:#000;color:#d1d1d6;justify-content:space-between}
+.term pre{margin:0;padding:14px 16px;font:12px/1.55 var(--font-mono,ui-monospace,"SF Mono",Menlo,monospace);white-space:pre-wrap}
+.term .dim{color:#8e8e93}.term .grn{color:#32d74b}.term .red{color:#ff6961}
+/* launcher */
+.glass{position:relative;border-radius:24px;overflow:hidden;background:rgba(246,246,250,.62);-webkit-backdrop-filter:blur(30px) saturate(1.9);backdrop-filter:blur(30px) saturate(1.9);box-shadow:0 0 0 .5px rgba(0,0,0,.2),inset 0 0 0 1px rgba(255,255,255,.5),0 26px 60px rgba(0,0,0,.35)}
+.lhead{padding:12px}
+.field{display:flex;align-items:center;gap:10px;height:50px;padding:0 16px;border-radius:999px;background:rgba(255,255,255,.6);box-shadow:inset 0 0 0 .5px rgba(0,0,0,.1)}
+.field input{flex:1;min-width:0;font:400 21px var(--sys);border:0;outline:0;background:transparent;color:#1d1d1f}
+.field svg{fill:none;stroke:#6e6e73;stroke-width:2.2;stroke-linecap:round;flex:none}
+.mode{display:none;font-size:11px;font-weight:600;border-radius:999px;padding:2px 9px;white-space:nowrap}.mode.on{display:inline-block}
+#mShare{background:#ff9f0a;color:#fff}#mOff{background:rgba(0,0,0,.12);color:#3a3a3c}
+.lbody{display:grid;grid-template-columns:56% 44%;height:372px;border-top:.5px solid rgba(0,0,0,.1)}
+.list{position:relative;overflow:auto;padding:4px 0 8px}
+.grp{font-size:11px;font-weight:600;color:#7c7c80;padding:9px 18px 3px}
+.it{display:flex;gap:10px;align-items:center;padding:5px 10px;margin:0 6px;border-radius:9px}
+.it .t{flex:1;min-width:0}.it .t div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.it .ss{font-size:11.5px;color:#6e6e73}
+.src{flex:none;font-size:10.5px;border-radius:999px;padding:1px 7px;background:rgba(0,0,0,.06);color:#5f5f64}
+.it.sel{background:var(--acc);color:#fff}.it.sel .ss{color:rgba(255,255,255,.82)}.it.sel .src{background:rgba(255,255,255,.24);color:#fff}
+.wait{display:flex;gap:8px;align-items:center;padding:8px 18px;font-size:12px;color:#7c7c80}
+.spin{width:12px;height:12px;border:2px solid rgba(0,0,0,.15);border-top-color:#6e6e73;border-radius:50%;animation:sp .8s linear infinite}@keyframes sp{to{transform:rotate(360deg)}}
+.pv{border-left:.5px solid rgba(0,0,0,.1);background:rgba(255,255,255,.4);padding:18px;overflow:auto;font-size:12.5px}
+.pv h3{margin:10px 0 2px;font-size:16px}.pv .meta{color:#6e6e73;font-size:11.5px;margin-bottom:10px}
+.pv .act{display:flex;flex-wrap:wrap;gap:6px;margin-top:14px}
+.shot{border-radius:9px;background:linear-gradient(180deg,#fff,#f1f1f6);box-shadow:0 0 0 .5px rgba(0,0,0,.12);padding:8px;font-size:11px;margin-bottom:10px}
+.pc h4{margin:12px 0 4px;font-size:11px;font-weight:600;color:#7c7c80}.pc .ln{display:flex;gap:7px;align-items:center;padding:3px 0}
+.pc a{color:var(--acc);cursor:pointer;font-size:11.5px;margin-left:auto}
+.lfoot{display:flex;justify-content:space-between;gap:8px;padding:7px 16px;border-top:.5px solid rgba(0,0,0,.1);font-size:11.5px;color:#6e6e73}
+.empty{color:#86868b;padding:4px 0}
+/* settings */
+.set{background:#f5f5f7;padding:18px 20px}
+.hero{display:flex;gap:12px;align-items:center;margin-bottom:14px}.hero h2{margin:0;font-size:17px}
+.box{background:#fff;border-radius:10px;box-shadow:0 0 0 .5px rgba(0,0,0,.1);margin-bottom:12px}
+.box>.r{display:flex;align-items:center;gap:10px;padding:9px 12px}.box>.r+.r{border-top:.5px solid #e5e5ea}
+.box .r .l{flex:1;min-width:0}
+.bt{font-size:11px;font-weight:600;color:#7c7c80;margin:0 4px 5px}
+.bar{height:6px;border-radius:3px;background:#e5e5ea;overflow:hidden;display:flex}.bar i{display:block;height:100%}
+.sw{width:30px;height:18px;border-radius:9px;background:#34c759;position:relative;flex:none}.sw:after{content:"";position:absolute;right:2px;top:2px;width:14px;height:14px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.3)}
+.seg{display:inline-flex;background:rgba(0,0,0,.07);border-radius:8px;padding:2px}.seg button{font:inherit;font-size:12px;border:0;background:transparent;border-radius:6px;padding:3px 10px;color:#1d1d1f}.seg button.on{background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.18)}
+.lock{display:inline-flex;gap:4px;align-items:center;font-size:10.5px;border-radius:999px;padding:1px 7px;background:#fff1d6;color:#9a5b00;white-space:nowrap}
+.lg{display:inline-flex;gap:5px;align-items:center;margin-right:10px}.lg i{width:8px;height:8px;border-radius:2px;display:inline-block}
+/* phone */
+.phone{width:296px;border-radius:50px;padding:11px;background:#1c1c1e;box-shadow:0 0 0 2px #48484a,0 24px 50px rgba(0,0,0,.4)}
+.scr{position:relative;border-radius:40px;background:#f2f2f7;overflow:hidden;padding:14px 16px 12px}
+.isl{position:absolute;left:50%;top:10px;transform:translateX(-50%);width:92px;height:27px;border-radius:14px;background:#000}
+.sbar{display:flex;justify-content:space-between;font-size:13px;font-weight:600;padding:2px 12px 0;height:26px}
+.ptitle{font-size:28px;font-weight:700;margin:16px 0 8px}
+.psearch{display:flex;gap:6px;align-items:center;background:rgba(118,118,128,.14);border-radius:11px;padding:7px 10px;font-size:15px}
+.pban{font-size:12px;background:#fff4d6;color:#8a5300;border-radius:12px;padding:8px 10px;margin:10px 0}
+.plist{background:#fff;border-radius:14px;overflow:hidden}.plist .r{display:flex;gap:10px;align-items:center;padding:9px 12px}.plist .r+.r{border-top:.5px solid #e5e5ea}
+.thumb{width:40px;height:40px;border-radius:8px;flex:none}
+.ptabs{display:flex;justify-content:space-around;margin:66px 4px 6px;padding:7px 4px;border-radius:999px;background:rgba(255,255,255,.75);box-shadow:0 0 0 .5px rgba(0,0,0,.1),0 6px 18px rgba(0,0,0,.12);font-size:10px;color:#6e6e73}
+.ptabs span{display:flex;flex-direction:column;align-items:center;gap:1px;padding:3px 8px;white-space:nowrap;border-radius:999px}.ptabs .on{color:var(--acc);background:rgba(10,122,255,.1)}
+.ptabs svg{fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+.home{width:110px;height:4px;border-radius:2px;background:#1d1d1f;margin:6px auto 0}
+@media (max-width:600px){.split,.split3{grid-template-columns:1fr}.sb,.split3>.ml{display:none}.main{border-left:0}.lbody{grid-template-columns:1fr;height:auto}.list{max-height:300px}.pv{border-left:0;border-top:.5px solid rgba(0,0,0,.1)}.plans{grid-template-columns:1fr}}
+</style></head><body>
+<h1>Fieldcraft: one place that remembers, every surface that asks</h1>
+<p class="lead">A user journey across I Want Things, its mail, HiComputer, a coding agent and the Fieldcraft launcher. Content is captured where it happens, stored and indexed on your hub (the Mac mini, or your only Mac), and returned to whoever asks, if they may see it.</p>
+<div class="steps" role="tablist" id="steps"></div>
+
+<section class="scene" data-t="1 · Save in IWT">
+<p class="story">You read a competitor's pricing page in I Want Things and save it.</p>
+<div class="desk"><div class="mw">
+<div class="tb"><div class="tl"><i></i><i></i><i></i></div><span class="chev">‹›</span><div class="url"><svg width="11" height="11" viewBox="0 0 24 24" style="fill:none;stroke:#8a8a8e;stroke-width:2.4"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/></svg>northwind.example/pricing</div><button class="mb pri" id="saveBtn">☆ Save to My Things</button></div>
+<div class="page"><div style="display:flex;gap:8px;align-items:center"><i data-ic="nw" data-s="22"></i><b>Northwind</b><span class="dim" style="margin-left:auto">Product · Pricing · Docs</span></div>
+<h2 style="margin:16px 0 0;font-size:22px">Simple pricing for growing teams</h2>
+<div class="plans"><div class="plan">Starter<b>€9</b><span class="dim">per seat / month</span></div><div class="plan hl">Pro<b>€24</b><span class="dim">per seat, annual only</span></div><div class="plan">Enterprise<b>Talk to us</b><span class="dim">SSO, audit log</span></div></div></div>
+</div><div class="toast" id="saveToast" style="bottom:28px" hidden><i data-ic="iwt" data-s="16"></i>Saved. On your hub and searchable everywhere in about a second.</div></div>
+<div class="flow"><span>IWT captures the page</span><b>→</b><span>Hub stores it (Fieldcraft owns My Things)</span><b>→</b><span>1 chunk embedded</span><b>→</b><span>Copied to your iPhone's replica</span></div>
+<p class="note">Private windows are never captured. The page image is kept, because sites change their images.</p>
+</section>
+
+<section class="scene" data-t="2 · Mail">
+<p class="story">Mara replies with her notes on your Pro plan price, with a PDF attached.</p>
+<div class="desk"><div class="mw split3">
+<div class="sb"><div class="tl"><i></i><i></i><i></i></div><div class="sh">Favorites</div><div class="si on"><i data-g="env"></i>Inbox<span class="n">3</span></div><div class="si"><i data-g="star"></i>VIP</div><div class="si"><i data-g="flag"></i>Flagged</div><div class="sh">Mailboxes</div><div class="si"><i data-g="send"></i>Sent</div><div class="si"><i data-g="box"></i>Archive</div><div class="sh">Fieldcraft</div><div class="si dim" style="font-size:11.5px">Indexed 12,480</div></div>
+<div class="ml"><div class="tb"><span class="ttl">Inbox</span><span class="sub">3 unread</span></div>
+<div class="mr on"><div class="h"><b>Mara Lind</b><span class="dim">09:12</span></div><div>Pro plan pricing: my notes</div><div class="p">I'd go €19 per seat, monthly allowed…</div></div>
+<div class="mr"><div class="h"><b>Northwind</b><span class="dim">Oct 31</span></div><div>Your invoice for October</div><div class="p">Invoice NW-1043 is ready</div></div>
+<div class="mr"><div class="h"><b>SaaS Weekly</b><span class="dim">Oct 30</span></div><div>5 pricing myths</div><div class="p">This week: seats vs usage</div></div></div>
+<div class="main rd"><div class="who"><i data-ic="p:ML" data-s="34"></i><div><b>Mara Lind</b><div class="dim" style="font-size:11.5px">to you · today 09:12</div></div></div>
+<b style="font-size:15px">Pro plan pricing: my notes</b><p>I'd go €19 per seat, monthly allowed. Annual-only killed our trial conversion last time. Notes attached.</p>
+<div class="att"><i data-ic="pdf" data-s="24"></i><div>pricing-notes.pdf<div class="dim" style="font-size:11px">240 KB</div></div></div></div>
+</div></div>
+<div class="flow"><span>Mail fetched on device</span><b>→</b><span>Headers + new text sent to hub (quoted replies stripped)</span><b>→</b><span>PDF text extracted, file stays in Gmail</span><b>→</b><span>Invoice and newsletter: keyword index only</span></div>
+<p class="note">Automated mail is searchable by keywords but not embedded, which keeps the index small.</p>
+</section>
+
+<section class="scene" data-t="3 · HiComputer">
+<p class="story">In the #launch room, the researcher agent Iris turns both into a deck.</p>
+<div class="desk"><div class="mw split">
+<div class="sb"><div class="tl"><i></i><i></i><i></i></div><div class="sh">Rooms</div><div class="si on"># launch</div><div class="si"># billing</div><div class="si"># design</div><div class="sh">Agents</div><div class="si"><i data-ic="p:Ir" data-s="18"></i>Iris · researcher</div><div class="si"><i data-ic="p:Ot" data-s="18"></i>Otto · implementer</div></div>
+<div class="main"><div class="tb"><span class="ttl"># launch</span><span class="sub">You, Mara, Iris</span></div>
+<div class="msg"><i data-ic="p:Me" data-s="30"></i><div class="bd"><b>You</b> <span class="dim">10:02</span><div>Iris, compare Northwind with Mara's notes and draft our pricing.</div></div></div>
+<div class="msg"><i data-ic="p:Ir" data-s="30"></i><div class="bd"><b>Iris</b> <span class="vb">researcher ✓</span> <span class="dim">10:06</span><div>Done. Recommending €19/seat monthly, €16 annual.</div><div class="card"><i data-ic="deck" data-s="30"></i><div><b>Pricing deck v3</b><div class="dim" style="font-size:11.5px">Deck · 6 slides · #launch</div></div></div></div></div>
+<div class="compose">Message #launch</div></div></div></div>
+<div class="flow"><span>Relay sends the latest version + room members</span><b>→</b><span>Hub indexes the text, tags author Iris (verified)</span><b>→</b><span>Only #launch members can find it</span></div>
+<p class="note">Older versions and attachments stay in the relay; the hub keeps text and a link.</p>
+</section>
+
+<section class="scene" data-t="4 · Launcher" data-q="pricing">
+<p class="story">Anywhere on your Mac, press ⌘Space. One panel searches apps, tabs, saves, mail, agent documents, lessons and people. Try the examples.</p>
+<div class="slot"></div>
+<p class="note">Apps, tabs and the calculator answer instantly from this Mac. Everything else streams from the hub after about 240 ms and is added below, so nothing jumps under your cursor.</p>
+</section>
+
+<section class="scene" data-t="5 · Coding agent">
+<p class="story">Later, a coding agent is asked to wire the new price into checkout. It gets the right memories without being told where they are.</p>
+<div class="desk"><div class="mw term"><div class="tb"><div class="tl"><i></i><i></i><i></i></div><span>billing-service — claude — 96×24</span><span style="width:52px"></span></div>
+<pre>&gt; wire the Pro plan price into checkout
+<span class="dim">fieldcraft · should memory help this prompt? yes (0.71)</span>
+<span class="dim">fieldcraft · injected 3 notes:</span>
+<span class="grn">✓</span> lesson: Stripe price ids live in config/billing.toml  <span class="dim">otto (implementer) ✓</span>
+<span class="grn">✓</span> HiComputer: Pricing deck v3 · €19 monthly, €16 annual <span class="dim">iris (researcher) #launch</span>
+<span class="grn">✓</span> lesson: checkout tests need STRIPE_MOCK=1              <span class="dim">codex (implementer)</span>
+<span class="red">✗</span> <span class="dim">Iris's private scratch notes: not shown (private to Iris)</span>
+<span class="red">✗</span> <span class="dim">Mara's mail: not shown (agents can't read your mail unless you allow it)</span></pre></div></div>
+<div class="flow"><span>Hook asks the hub</span><b>→</b><span>Access checked before ranking</span><b>→</b><span>Lessons + room docs the agent may see</span><b>→</b><span>Outcome recorded when the agent uses one</span></div>
+</section>
+
+<section class="scene" data-t="6 · Shared screen">
+<p class="story">You share your screen in a call and open the launcher. Mail, private notes, people and anything not marked safe to show are hidden, and the panel says so.</p>
+<div class="desk"><div class="menu"><b>Fieldcraft</b><span>File</span><span>Edit</span><span class="sp"></span><span class="share">▣ Sharing screen</span><span>Tue 10:41</span></div>
+<div class="glass" style="max-width:380px;margin:20px auto 30px;padding:14px 16px;display:flex;gap:12px;align-items:center"><i data-ic="fc" data-s="38"></i><div><b>Shared-screen mode is on</b><div style="font-size:12px;color:#3a3a3c">Mail, people and private notes are hidden from the launcher until the share ends.</div></div></div></div>
+<div class="flow"><span>macOS reports a screen share (or you flip the switch)</span><b>→</b><span>Launcher sends display context "shared"</span><b>→</b><span>Hub filters before ranking</span></div>
+<p class="note">Search "pricing" in the launcher and compare with the normal view.</p>
+<p><button class="pbtn pri" id="goShare">Show it in the launcher</button></p>
+</section>
+
+<section class="scene" data-t="7 · iPhone offline">
+<p class="story">On a train with no signal, you look up the Northwind page on your iPhone and save another one.</p>
+<div class="desk ctr"><div class="phone"><div class="scr"><div class="isl"></div><div class="sbar"><span>9:41</span><span style="display:flex;gap:5px;align-items:center"><svg width="17" height="11" viewBox="0 0 17 11" style="fill:#c7c7cc"><rect x="0" y="7" width="3" height="4" rx="1"/><rect x="4.5" y="5" width="3" height="6" rx="1"/><rect x="9" y="3" width="3" height="8" rx="1"/><rect x="13.5" y="0" width="3" height="11" rx="1"/></svg><svg width="24" height="11" viewBox="0 0 24 11"><rect x=".5" y=".5" width="20" height="10" rx="3" style="fill:none;stroke:#8a8a8e"/><rect x="2" y="2" width="13" height="7" rx="1.6" style="fill:#1d1d1f"/><rect x="21.5" y="3.5" width="1.5" height="4" rx=".7" style="fill:#8a8a8e"/></svg></span></div>
+<div class="ptitle">My Things</div><div class="psearch"><svg width="14" height="14" viewBox="0 0 24 24" style="fill:none;stroke:#8a8a8e;stroke-width:2.6;stroke-linecap:round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5L20 20"/></svg>northwind</div>
+<div class="pban">Hub unreachable. Searching this iPhone's copy. 1 save waiting to sync.</div>
+<div class="plist"><div class="r"><div class="thumb" style="background:linear-gradient(135deg,#5856d6,#af52de)"></div><div><b>Northwind pricing</b><div class="dim" style="font-size:12px">northwind.example · saved today</div></div></div>
+<div class="r"><div class="thumb" style="background:linear-gradient(135deg,#34c7a9,#007aff)"></div><div><b>Northwind changelog</b><div style="font-size:12px;color:#c27c00">Waiting to sync</div></div></div></div>
+<div class="ptabs"><span><svg width="20" height="20" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M4 12h16M12 4c3 3 3 13 0 16M12 4c-3 3-3 13 0 16"/></svg>Browser</span><span><svg width="20" height="20" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5L20 20"/></svg>Search</span><span class="on"><svg width="20" height="20" viewBox="0 0 24 24"><path d="M7 4h10v16l-5-4-5 4z"/></svg>My Things</span><span><svg width="20" height="20" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="7.5" stroke-dasharray="3 2.9" stroke-width="3"/></svg>Settings</span></div>
+<div class="home"></div></div></div></div>
+<div class="flow"><span>Phone keeps My Things + last 90 days</span><b>→</b><span>Query encoded on the phone</span><b>→</b><span>New save queued</span><b>→</b><span>Replayed once on reconnect</span></div>
+<p class="note">Mail older than 90 days and other rooms' documents need the hub, so they reappear when you're back online.</p>
+</section>
+
+<section class="scene" data-t="8 · Only one Mac">
+<p class="story">Without a Mac mini, Fieldcraft runs on your MacBook Air, and it becomes the hub.</p>
+<div class="desk"><div class="mw split"><div class="sb" data-sb="Hub"></div>
+<div class="main set"><div class="hero"><i data-ic="fc" data-s="44"></i><div><h2>This Mac is your hub</h2><div class="dim">MacBook Air · stores and indexes everything, answers your other devices</div></div></div>
+<div class="bt">Indexing</div><div class="box"><div class="r"><i data-ic="mail" data-s="22"></i><div class="l">Mail backlog<div class="bar" style="margin-top:5px"><i id="mbar" style="width:62%;background:#0a7aff"></i></div></div><span id="mtxt" class="dim" style="white-space:nowrap;font-size:12px">62% · paused on battery</span><button class="mb" id="plug">Plug in</button></div>
+<div class="r"><i data-ic="hc" data-s="22"></i><div class="l">HiComputer</div><span class="grn">Up to date</span></div><div class="r"><i data-ic="iwt" data-s="22"></i><div class="l">My Things · 3,760 items</div><span class="grn">Up to date</span></div></div>
+<div class="bt">Storage · 2.65 GB</div><div class="box" id="stor"></div>
+<div class="bt">This Mac</div><div class="box"><div class="r"><div class="l">Memory in use</div><span>380 MB <span class="dim">· model loaded while indexing</span></span></div>
+<div class="r"><div class="l">Encrypted backup to the cloud<div class="dim" style="font-size:11.5px">Ciphertext only. The key stays in this Mac's Keychain. Last backup 2 h ago.</div></div><span class="sw"></span></div>
+<div class="r"><div class="l">iPhone sync<div class="dim" style="font-size:11.5px">When this Mac sleeps, your iPhone syncs through the encrypted relay and catches up on wake.</div></div><span class="sw"></span></div></div>
+</div></div></div>
+<div class="flow"><span>No mini: this Mac runs the hub</span><b>→</b><span>Backlog pauses on battery, resumes on power</span><b>→</b><span>Encrypted backup off-site</span><b>→</b><span>iPhone via the encrypted relay while asleep</span></div>
+<p class="note">Same software as the mini. Moving to a mini later copies the stores across; nothing is re-indexed.</p>
+</section>
+
+<section class="scene" data-t="9 · Forget and restore" data-q="pricing">
+<p class="story">A result you'd rather not see again: select it and press Forget. It disappears, Undo is offered, and it waits in Archived.</p>
+<div class="slot"></div>
+<div class="desk" style="margin-top:12px"><div class="mw split"><div class="sb" data-sb="Archived"></div>
+<div class="main set"><div class="bt">Archived · restorable for 90 days</div><div class="box" id="arch"></div>
+<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><button class="mb" id="readd">Otto tries to re-add a forgotten item</button><span id="readdOut" style="font-size:12px"></span></div></div></div></div>
+<div class="flow"><span>Forget</span><b>→</b><span>Hidden everywhere, tombstone kept</span><b>→</b><span>Agents can't re-add it</span><b>→</b><span>After 90 days: purged, only a hash remains</span></div>
+<p class="note">The tombstone is what stops an agent or connector from quietly putting a forgotten item back. After the purge only its content hash is kept, so a re-add is still recognised.</p>
+</section>
+
+<section class="scene" data-t="10 · Agents and notes">
+<p class="story">Every lesson and note carries its author. You see who wrote what and how their lessons fared.</p>
+<div class="desk"><div class="mw split"><div class="sb" data-sb="Agents"></div>
+<div class="main set"><div class="bt">Agents</div><div class="box" id="agents"></div>
+<div style="font-size:11.5px;margin:-4px 4px 14px"><span class="lg"><i style="background:#34c759"></i>confirmed</span><span class="lg"><i style="background:#c7c7cc"></i>ignored</span><span class="lg"><i style="background:#ff453a"></i>contradicted</span></div>
+<div style="display:flex;align-items:center;gap:8px;margin:0 4px 6px"><span class="bt" style="margin:0;flex:1">Iris's notes</span><span class="seg" id="viewAs"><button class="on">You (owner)</button><button>Otto (agent)</button></span></div>
+<div class="box" id="notes"></div>
+<div class="dim" style="font-size:11.5px;margin:0 4px">Author data is recorded and shown here. It does not change ranking yet.</div></div></div></div>
+<div class="flow"><span>Token bound to an agent</span><b>→</b><span>Author + verified flag on every write</span><b>→</b><span>Outcomes counted per lesson</span><b>→</b><span>Private notes: author + owner only</span></div>
+</section>
+
+<section class="scene" data-t="11 · Person card" data-q="mara">
+<p class="story">Search a name and get the person: her mail, the rooms she's in, what she shared, and lessons that mention her.</p>
+<div class="slot"></div>
+<div class="flow"><span>People from mail senders + room members</span><b>→</b><span>Items link to them</span><b>→</b><span>Card assembled on the hub</span><b>→</b><span>Hidden on a shared screen</span></div>
+<p class="note">Turn on shared-screen mode: the card and Mara's mail disappear; the shared benchmark and the lesson stay because they are display-safe.</p>
+</section>
+
+<div id="lw"><div class="desk"><div class="menu"><b>I Want Things</b><span>File</span><span>Edit</span><span>View</span><span class="sp"></span><span>Tue 10:41</span></div>
+<div class="glass"><div class="lhead"><div class="field"><svg width="20" height="20" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5L20 20"/></svg><input id="q" placeholder="Search everything" autocomplete="off" spellcheck="false" aria-label="Search"><span class="mode" id="mShare">Shared screen</span><span class="mode" id="mOff">Hub unreachable</span></div></div>
+<div class="lbody"><div class="list" id="list" role="listbox"></div><div class="pv" id="pv"></div></div>
+<div class="lfoot"><span id="stat">Type to search</span><span>↑↓ select · ↩ open · esc clear</span></div>
+<div class="toast" id="ltoast" hidden></div></div></div>
+<div class="chips" id="chips"></div>
+<div class="toggles"><label><input type="checkbox" id="tShare"> Shared-screen mode</label><label><input type="checkbox" id="tOff"> Hub unreachable</label></div></div>
+
+<script>
+const G={spark:'<path d="M12 3l2.2 6.8L21 12l-6.8 2.2L12 21l-2.2-6.8L3 12l6.8-2.2z" fill="#fff" stroke="none"/>',env:'<rect x="3.5" y="6" width="17" height="12.5" rx="2"/><path d="M4 7l8 6 8-6"/>',chat:'<path d="M5 5.5h14a1 1 0 011 1v8.5a1 1 0 01-1 1h-8l-4 3v-3H5a1 1 0 01-1-1V6.5a1 1 0 011-1z"/>',graph:'<circle cx="6" cy="17" r="2.2"/><circle cx="18" cy="17" r="2.2"/><circle cx="12" cy="6" r="2.2"/><path d="M7.2 15.2L10.8 8M16.8 15.2L13.2 8M8.4 17h7.2"/>',term:'<path d="M6 8l4 4-4 4M12.5 16H18"/>',pen:'<path d="M5 19l1-4L16 5l3 3L9 18z"/>',comp:'<circle cx="12" cy="12" r="8"/><path d="M15.5 8.5l-2 5-5 2 2-5z" fill="#fff"/>',gear:'<circle cx="12" cy="12" r="6.5" stroke-width="3.4" stroke-dasharray="2.6 2.5"/><circle cx="12" cy="12" r="2.4"/>',calc:'<path d="M7 10h10M7 14.5h10"/>',book:'<path d="M4.5 5.5H10a2 2 0 012 2v12a2 2 0 00-2-2H4.5zM19.5 5.5H14a2 2 0 00-2 2v12a2 2 0 012-2h5.5z"/>',globe:'<circle cx="12" cy="12" r="8"/><path d="M4 12h16M12 4c3 3 3 13 0 16M12 4c-3 3-3 13 0 16"/>',clock:'<circle cx="12" cy="12" r="8"/><path d="M12 7.5V12l3 2"/>',bmk:'<path d="M7 4h10v16l-5-4-5 4z"/>',doc:'<path d="M7 3.5h7l4 4V20.5H7z M14 3.5v4h4"/>',deck:'<rect x="4" y="5" width="16" height="11" rx="1.5"/><path d="M12 16v4M9 20h6"/>',lock:'<rect x="6" y="11" width="12" height="9" rx="2"/><path d="M9 11V8a3 3 0 016 0v3"/>',disp:'<rect x="3.5" y="5" width="17" height="11.5" rx="1.5"/><path d="M9 20h6"/>',pdf:'<path d="M7 3.5h7l4 4V20.5H7z"/><path d="M9.5 15h5"/>',n:'<path d="M7 18V6l10 12V6"/>',star:'<path d="M12 4l2.4 5 5.4.6-4 3.7 1.1 5.4L12 16l-4.9 2.7 1.1-5.4-4-3.7 5.4-.6z"/>',flag:'<path d="M6 21V4h11l-2 4 2 4H6"/>',send:'<path d="M4 12l16-7-6 15-3-6z"/>',box:'<rect x="4" y="5" width="16" height="4" rx="1"/><path d="M5.5 9v10h13V9M10 13h4"/>'};
+const IC={iwt:['#7ad8ff,#2a6df4','spark'],mail:['#6cc8ff,#1a6ff0','env'],hc:['#c77dff,#5b4ce0','chat'],fc:['#3ad57e,#0b7a55','graph'],term:['#4a4a4e,#1c1c1e','term'],design:['#ff8a65,#a259ff','pen'],web:['#e8f3ff,#62a8ff','comp'],gear:['#b8b8be,#6c6c72','gear'],calc:['#ffb340,#ff7a00','calc'],lesson:['#ffd84d,#ff9f0a','book'],tab:['#8fb7ff,#4f6bed','globe'],hist:['#c7c7cc,#8e8e93','clock'],bmk:['#ff8f8f,#ff3b30','bmk'],saved:['#5be0c8,#1a9cc9','spark'],doc:['#c77dff,#5b4ce0','doc'],deck:['#ffb067,#f2545b','deck'],lock:['#ffc966,#e08a00','lock'],disp:['#7fc8ff,#3478f6','disp'],pdf:['#ff6b6b,#d92d2d','pdf'],nw:['#5e5ce6,#af52de','n']};
+function ic(n,s=28){if(n.startsWith('p:')){const t=n.slice(2),h=[...t].reduce((a,c)=>a+c.charCodeAt(0),0)%5,c=['#ff9f0a,#ff6b3d','#5ac8fa,#5856d6','#30d158,#0a8f6a','#bf5af2,#7d3cff','#8e8e93,#48484a'][h];return `<span class="ic" style="width:${s}px;height:${s}px;border-radius:50%;font-size:${s*.4}px;background:linear-gradient(160deg,${c})">${t}</span>`}
+ const [c,g]=IC[n]||IC.doc;return `<span class="ic" style="width:${s}px;height:${s}px;border-radius:${s*.24}px;background:linear-gradient(160deg,${c})"><svg viewBox="0 0 24 24" width="${s*.62}" height="${s*.62}">${G[g]}</svg></span>`}
+const $=s=>document.querySelector(s);
+const fill=root=>{root.querySelectorAll('[data-ic]').forEach(e=>e.outerHTML=ic(e.dataset.ic,+e.dataset.s||28));root.querySelectorAll('[data-g]').forEach(e=>e.outerHTML=`<svg viewBox="0 0 24 24" width="15" height="15" style="fill:none;stroke:#0a7aff;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none">${G[e.dataset.g]}</svg>`)};
+// launcher data (fictional)
+const D=[
+{id:1,k:'App',t:'Figma',s:'Application',loc:1,safe:1,ic:'design',kw:'figma design'},
+{id:2,k:'App',t:'Safari',s:'Application',loc:1,safe:1,ic:'web',kw:'safari browser'},
+{id:3,k:'App',t:'I Want Things',s:'Application',loc:1,safe:1,ic:'iwt',kw:'iwt browser i want things'},
+{id:4,k:'App',t:'HiComputer',s:'Application',loc:1,safe:1,ic:'hc',kw:'hicomputer agents rooms'},
+{id:5,k:'App',t:'Mail',s:'Application',loc:1,safe:1,ic:'mail',kw:'mail'},
+{id:6,k:'App',t:'Terminal',s:'Application',loc:1,safe:1,ic:'term',kw:'terminal shell'},
+{id:7,k:'App',t:'Displays',s:'System Settings',loc:1,safe:1,ic:'disp',kw:'displays screen resolution'},
+{id:8,k:'App',t:'Fieldcraft Settings',s:'Application',loc:1,safe:1,ic:'fc',kw:'fieldcraft settings hub'},
+{id:9,k:'Tab',t:'Northwind pricing',s:'Open tab · I Want Things',loc:1,safe:1,kw:'northwind pricing pro starter',open:'I Want Things'},
+{id:10,k:'Saved',t:'Northwind pricing',s:'northwind.example · saved today',safe:1,rep:1,img:1,kw:'northwind pricing pro starter competitor',p:'Starter €9/seat · Pro €24/seat, annual only · Enterprise: talk to sales.',open:'I Want Things'},
+{id:11,k:'Saved',t:'How we priced our SaaS (video)',s:'video.example · liked in March',safe:1,rep:1,kw:'pricing saas video',p:'A founder walks through per-seat versus usage pricing.',open:'I Want Things'},
+{id:12,k:'Saved',t:'Churn benchmarks 2026',s:'shared by Mara Lind · Oct 12',safe:1,rep:1,from:'mara',kw:'churn benchmarks saas trial mara',p:'Median monthly churn by plan type. Mara shared it to #launch.',open:'I Want Things'},
+{id:13,k:'Bookmark',t:'Stripe pricing tables docs',s:'docs.stripe.example',safe:1,rep:1,kw:'stripe pricing checkout docs',p:'Bookmarked in the Billing folder.',open:'I Want Things'},
+{id:14,k:'History',t:'Seat-based pricing calculator',s:'Visited yesterday',safe:1,kw:'pricing seat calculator',p:'Visited twice, last yesterday 16:40.',open:'I Want Things'},
+{id:15,k:'Mail',t:'Pro plan pricing: my notes',s:'Mara Lind · today · pricing-notes.pdf',safe:0,rep:1,from:'mara',kw:'pricing pro plan notes mara trial annual',p:'"I\'d go €19 per seat, monthly allowed. Annual-only killed our trial conversion last time." Attachment text indexed; the PDF stays in Gmail.',open:'Mail'},
+{id:16,k:'Mail',t:'Re: Launch date for Pro',s:'Mara Lind · Oct 28',safe:0,rep:1,from:'mara',kw:'launch date pro mara',p:'"Let\'s ship the new price with the November release."',open:'Mail'},
+{id:17,k:'Mail',t:'Your invoice for October',s:'Northwind · Oct 31',safe:0,from:'northwind',kw:'invoice northwind',p:'Automated mail: keyword index only.',open:'Mail'},
+{id:18,k:'HiComputer',t:'Pricing deck v3',s:'#launch · deck · by Iris (researcher)',safe:1,by:'iris',room:'launch',ic:'deck',kw:'pricing deck pro plan launch iris',p:'Recommends €19/seat monthly, €16 annual. Compares Northwind with Mara\'s notes. 6 slides.',open:'HiComputer'},
+{id:19,k:'HiComputer',t:'Iris · scratch notes',s:'private to Iris',safe:0,by:'iris',ic:'lock',kw:'pricing notes scratch iris',p:'Private to Iris. Shown to you as the owner; never to other agents.',open:'HiComputer'},
+{id:20,k:'Lesson',t:'Stripe price ids live in config/billing.toml',s:'by otto (implementer) ✓ verified',safe:1,by:'otto',kw:'stripe price checkout billing pricing config',p:'Never hard-code price ids; checkout reads them from config/billing.toml. Confirmed in 4 sessions.',open:'Fieldcraft'},
+{id:21,k:'Lesson',t:'Annual-only pricing hurt trial conversion',s:'by distiller · mentions Mara Lind',safe:1,by:'distiller',kw:'pricing annual trial conversion mara',p:'From the 2025 launch retro: trials that could not pick monthly converted 30% less.',open:'Fieldcraft'},
+{id:22,k:'Person',t:'Mara Lind',s:'Co-founder · 12 mails · 2 rooms',safe:0,from:'mara',kw:'mara lind',open:'Fieldcraft'}];
+const KIC={Tab:'tab',Saved:'saved',Bookmark:'bmk',History:'hist',Mail:'mail',HiComputer:'doc',Lesson:'lesson',Calc:'calc'};
+const iconOf=(d,s)=>ic(d.k==='Person'?'p:ML':d.ic||KIC[d.k],s);
+const ORDER=['App','Tab','Saved','Mail','HiComputer','Lesson','Person','Bookmark','History'];
+const NAMES={App:'Applications',Tab:'Open tabs',Saved:'My Things',Mail:'Mail',HiComputer:'HiComputer documents',Lesson:'Lessons and notes',Person:'People',Bookmark:'Bookmarks',History:'History'};
+const q=$('#q'),list=$('#list'),pv=$('#pv'),stat=$('#stat');
+let shown=[],sel=0,timer=null,share=false,off=false,ttimer=null;
+const F=new Map();// forgotten id -> days left
+function parse(v){const f={},w=[];v.toLowerCase().split(/\s+/).filter(Boolean).forEach(x=>{const m=x.match(/^(mail|kind|from|by|in):(.*)$/);if(m){if(m[1]==='mail')f.kind='mail';else f[m[1]]=m[2]}else w.push(x)});return{f,w}}
+function match(d,{f,w}){
+ if(f.kind&&d.k.toLowerCase()!==f.kind)return 0;
+ if(f.from&&!(d.from||'').startsWith(f.from))return 0;
+ if(f.by&&!(d.by||'').startsWith(f.by))return 0;
+ if(f.in&&!(d.room||'').startsWith(f.in))return 0;
+ if(!w.length)return Object.keys(f).length?1:0;
+ const hay=(d.t+' '+d.s+' '+d.kw).toLowerCase();let sc=0;
+ for(const x of w){if(d.t.toLowerCase().startsWith(x))sc+=3;else if(hay.includes(x))sc+=1;else return 0}
+ return sc+(d.k==='App'?1:0)}
+function score(arr,P){return arr.filter(d=>!F.has(d.id)).map(d=>({...d,_sc:match(d,P)})).filter(d=>d._sc)}
+const vis=d=>!share||d.safe;
+function calc(v){if(!/^[\d\s+\-*/().]+$/.test(v)||!/[+\-*/]/.test(v))return null;try{const r=Function('return ('+v+')')();return isFinite(r)?r:null}catch(e){return null}}
+function render(local,remote,waiting){
+ list.innerHTML='';shown=[];
+ const add=(g,arr)=>{if(!arr.length)return;const h=document.createElement('div');h.className='grp';h.textContent=g;list.appendChild(h);
+  arr.forEach(d=>{const i=shown.length;shown.push(d);const e=document.createElement('div');e.className='it';e.setAttribute('role','option');
+   e.innerHTML=`${iconOf(d,28)}<div class="t"><div>${d.t}</div><div class="ss">${d.s}</div></div><span class="src">${d.k==='Calc'?'Calculator':d.k}</span>`;
+   e.onclick=()=>{sel=i;paint()};e.ondblclick=openIt;list.appendChild(e)})};
+ const best=local.slice().sort((a,b)=>b._sc-a._sc)[0],top=best&&best._sc>=4?best:null;if(top)add('Top hit',[top]);
+ ORDER.forEach(k=>add(NAMES[k],local.filter(d=>d!==top&&d.k===k).slice(0,3)));
+ const rb=remote.slice().sort((a,b)=>b._sc-a._sc)[0],rtop=!local.length&&rb&&rb._sc>=3?rb:null;if(rtop)add('Top hit',[rtop]);
+ ORDER.forEach(k=>add(NAMES[k],remote.filter(d=>d!==rtop&&d.k===k).sort((a,b)=>b._sc-a._sc).slice(0,3)));
+ if(waiting&&!off){const w=document.createElement('div');w.className='wait';w.innerHTML='<span class="spin"></span>Searching your hub…';list.appendChild(w)}
+ if(sel>=shown.length)sel=Math.max(0,shown.length-1);paint()}
+function personCard(){const L=(i,t,a)=>`<div class="ln">${ic(i,18)}<span>${t}</span>${a?`<a data-q="${a}">Show</a>`:''}</div>`;
+ return `<div style="text-align:center">${ic('p:ML',52)}<h3 style="margin-top:6px">Mara Lind</h3><div class="meta">Co-founder · mara@lind.example</div></div><div class="pc">
+ <h4>MAIL THREADS</h4>${L('mail','Pro plan pricing: my notes','from:mara')}${L('mail','Re: Launch date for Pro','from:mara')}
+ <h4>ROOMS</h4>${L('hc','# launch','in:launch')}${L('hc','# billing')}
+ <h4>SHARED WITH YOU</h4>${L('saved','Churn benchmarks 2026','churn')}
+ <h4>LESSONS THAT MENTION HER</h4>${L('lesson','Annual-only pricing hurt trial conversion','kind:lesson annual')}</div>
+ <div class="act"><button class="mb pri" data-a="open">Open in Fieldcraft</button><button class="mb" data-a="agent">Give to agent</button></div>`}
+function paint(){const rows=list.querySelectorAll('.it');rows.forEach((e,i)=>e.classList.toggle('sel',i===sel));const d=shown[sel],e=rows[sel];
+ if(e){if(e.offsetTop<list.scrollTop+20)list.scrollTop=e.offsetTop-26;else if(e.offsetTop+e.offsetHeight>list.scrollTop+list.clientHeight)list.scrollTop=e.offsetTop+e.offsetHeight-list.clientHeight+6}
+ if(!d){pv.innerHTML=`<div class="empty">${q.value.trim()?'No results'+(share?' that are safe to show on a shared screen.':'.'):'Try “pricing”, “fig”, “mara”, “from:mara”, “by:iris”, “kind:lesson” or “12*19”.'}</div>`;return}
+ if(d.k==='Person'){pv.innerHTML=personCard();return}
+ const where=d.loc?'on this Mac':off?'this Mac\'s copy':'from your hub';
+ const forget=!d.loc&&d.k!=='Calc';
+ pv.innerHTML=`${d.img?'<div class="shot"><b>Northwind</b><div class="plans" style="gap:4px;margin-top:6px;grid-template-columns:repeat(3,1fr)"><div class="plan" style="padding:5px">Starter<br>€9</div><div class="plan hl" style="padding:5px">Pro<br>€24</div><div class="plan" style="padding:5px">Ent.<br>—</div></div></div>':iconOf(d,48)}
+ <h3>${d.t}</h3><div class="meta">${d.s} · ${where}</div><div>${d.p||(d.k==='App'?'Opens the application.':d.k==='Tab'?'Switches to the tab in I Want Things.':'')}</div>
+ ${d.k==='HiComputer'&&d.ic==='lock'?'<p><span class="lock">🔒 private to Iris</span></p>':''}
+ <div class="act"><button class="mb pri" data-a="open">${d.k==='Calc'?'Copy':'Open'+(d.open&&d.k!=='App'?' in '+d.open:'')}</button>${forget?'<button class="mb" data-a="agent">Give to agent</button><button class="mb" data-a="priv">Make private</button><button class="mb red" data-a="forget">Forget</button>':''}</div>`}
+pv.addEventListener('click',e=>{const a=e.target.closest('[data-a]'),l=e.target.closest('a[data-q]');
+ if(l){q.value=l.dataset.q;sel=0;run();return}if(!a)return;const d=shown[sel];if(!d)return;
+ ({open:openIt,agent:()=>toast('Handed to an agent as context'),priv:()=>toast('Marked private'),forget:()=>forget(d)})[a.dataset.a]()});
+function toast(m,undo){const t=$('#ltoast');t.innerHTML=m+(undo?' <a>Undo</a>':'');t.hidden=false;if(undo)t.querySelector('a').onclick=undo;clearTimeout(ttimer);ttimer=setTimeout(()=>t.hidden=true,undo?6000:2200)}
+function openIt(){const d=shown[sel];if(d)toast(d.k==='Calc'?'Copied '+d.t:'Opening '+d.t+(d.open&&d.k!=='App'?' in '+d.open:''))}
+function forget(d){F.set(d.id,90);run(1);renderArch();toast(`Forgot “${d.t}”`,()=>{F.delete(d.id);run(1);renderArch();toast('Restored')})}
+function foot(local,remote,hid,ms){stat.textContent=`${local.length} on this Mac`+(remote?` · ${remote.length} ${off?'from this Mac\'s copy':'from your hub · '+ms+' ms'}`:'')+(hid?` · ${hid} hidden on a shared screen`:'')}
+function run(now){
+ clearTimeout(timer);const v=q.value.trim();if(!v){render([],[],0);stat.textContent='Type to search';return}
+ const P=parse(v),c=calc(v),all=score(D.filter(d=>d.loc),P);
+ const local=all.filter(vis);if(c!==null)local.unshift({id:'calc',k:'Calc',t:String(Math.round(c*1e6)/1e6),s:v+' =',loc:1,safe:1,_sc:9,p:'Press ↩ to copy the result.'});
+ const hub=()=>{const r=score(D.filter(d=>!d.loc&&(!off||d.rep)),P);return[r.filter(vis),r.filter(d=>!vis(d)).length+all.length-local.length+(c!==null?1:0)]};
+ if(now){const [r,h]=hub();render(local,r,0);foot(local,r,h,31);return}
+ render(local,[],1);foot(local,null,0);
+ const t0=performance.now();
+ timer=setTimeout(()=>{const cur=shown[sel]&&shown[sel].id,[r,h]=hub();render(local,r,0);const k=shown.findIndex(d=>d.id===cur);if(k>=0)sel=k;paint();
+  foot(local,r,h,Math.round(performance.now()-t0-200+28))},off?60:240)}
+q.addEventListener('input',()=>{sel=0;run()});
+q.addEventListener('keydown',e=>{const k=e.key||e.code||({40:'ArrowDown',38:'ArrowUp',13:'Enter',27:'Escape'})[e.keyCode];
+ if(k==='ArrowDown'){sel=Math.min(sel+1,shown.length-1);paint();e.preventDefault()}else if(k==='ArrowUp'){sel=Math.max(sel-1,0);paint();e.preventDefault()}else if(k==='Enter')openIt();else if(k==='Escape'){q.value='';run()}});
+['pricing','fig','mara','12*19','from:mara','by:iris','kind:lesson','in:launch deck'].forEach(x=>{const b=document.createElement('button');b.textContent=x;b.onclick=()=>{q.value=x;sel=0;run();q.focus({preventScroll:true})};$('#chips').appendChild(b)});
+const setShare=v=>{share=v;$('#tShare').checked=v;$('#mShare').classList.toggle('on',v);run()};
+const setOff=v=>{off=v;$('#tOff').checked=v;$('#mOff').classList.toggle('on',v);run()};
+$('#tShare').onchange=e=>setShare(e.target.checked);$('#tOff').onchange=e=>setOff(e.target.checked);
+// archived (scene 9)
+function renderArch(){const a=$('#arch');$('#readdOut').textContent='';if(!F.size){a.innerHTML='<div class="r dim">Nothing archived. Forget a result in the launcher above.</div>';return}
+ a.innerHTML=[...F].map(([id,days])=>{const d=D.find(x=>x.id===id);return `<div class="r">${iconOf(d,24)}<div class="l">${d.t}<div class="dim" style="font-size:11.5px">${d.k} · forgotten today</div></div><span class="dim" style="font-size:11.5px">${days} days left</span><button class="mb" data-r="${id}">Restore</button></div>`}).join('')}
+$('#arch').onclick=e=>{const b=e.target.closest('[data-r]');if(!b)return;const id=+b.dataset.r,d=D.find(x=>x.id===id);F.delete(id);renderArch();run(1);toast(`Restored “${d.t}”`)};
+$('#readd').onclick=()=>{const o=$('#readdOut');if(!F.size){o.innerHTML='<span class="dim">Forget something first.</span>';return}const d=D.find(x=>x.id===[...F.keys()][0]);o.innerHTML=`<span class="red">Rejected:</span> “${d.t}” is tombstoned (forgotten by the owner). Not re-added.`};
+// settings sidebars, storage, agents, notes
+const SB=['General','Hub','Sources','Agents','Archived','Backup'],SBI={General:'gear',Hub:'fc',Sources:'iwt',Agents:'hc',Archived:'lock',Backup:'disp'};
+document.querySelectorAll('[data-sb]').forEach(e=>e.innerHTML='<div class="tl"><i></i><i></i><i></i></div><div class="sh">Fieldcraft</div>'+SB.map(n=>`<div class="si${n===e.dataset.sb?' on':''}">${ic(SBI[n],18)}${n}</div>`).join(''));
+$('#stor').innerHTML=[['mail','Mail',1900,'1.9 GB','#0a7aff'],['lesson','Lessons',600,'0.6 GB','#ff9f0a'],['hc','HiComputer',140,'140 MB','#af52de'],['iwt','My Things',10,'10 MB','#30b0c7']].map(([i,n,mb,l,c])=>`<div class="r">${ic(i,20)}<div class="l">${n}<div class="bar" style="margin-top:4px"><i style="width:${Math.max(1,mb/19)}%;background:${c}"></i></div></div><span style="width:60px;text-align:right">${l}</span></div>`).join('');
+let pct=62,pt=null;$('#plug').onclick=()=>{const b=$('#plug');if(pt){clearInterval(pt);pt=null;b.textContent='Plug in';$('#mtxt').textContent=pct+'% · paused on battery';return}
+ b.textContent='Unplug';pt=setInterval(()=>{pct=Math.min(100,pct+1);$('#mbar').style.width=pct+'%';$('#mtxt').textContent=pct<100?pct+'% · indexing on power':'Up to date';if(pct>=100){clearInterval(pt);pt=null;b.hidden=true}},150)};
+$('#agents').innerHTML=[['Ot','Otto','implementer',1,12,18,4,0],['Ir','Iris','researcher',1,7,9,6,1],['Co','codex','implementer',0,3,3,2,0],['Di','distiller','pipeline',1,63,40,52,7]].map(([a,n,r,v,l,c,i,x])=>{const t=c+i+x,w=t/99*100;
+ return `<div class="r">${ic('p:'+a,26)}<div style="width:158px;white-space:nowrap"><b>${n}</b> ${v?'<span class="vb">✓ verified</span>':''}<div class="dim" style="font-size:11.5px">${r} · ${l} lessons</div></div><div class="l"><div class="bar" style="height:8px;width:${w}%;min-width:8px"><i style="width:${c/t*100}%;background:#34c759"></i><i style="width:${i/t*100}%;background:#c7c7cc"></i><i style="width:${x/t*100}%;background:#ff453a"></i></div></div><span style="font-variant-numeric:tabular-nums;white-space:nowrap;min-width:64px;text-align:right">${c} / ${i} / ${x}</span></div>`}).join('');
+const NOTES=['Northwind\'s annual-only may be a churn hedge, not a margin play','Check whether €16 annual undercuts Starter for 3-seat teams','Re-read Mara\'s PDF p.2 before v4'];
+function renderNotes(owner){$('#notes').innerHTML=owner?NOTES.map(t=>`<div class="r">${ic('lock',22)}<div class="l">${t}<div class="dim" style="font-size:11.5px">by Iris · scratch</div></div><span class="lock">🔒 private to Iris</span></div>`).join(''):'<div class="r"><div class="l dim">No notes visible. Iris\'s 3 private notes are hidden from other agents.</div></div>'}
+$('#viewAs').onclick=e=>{const b=e.target.closest('button');if(!b)return;[...$('#viewAs').children].forEach(x=>x.classList.toggle('on',x===b));renderNotes(b===$('#viewAs').firstElementChild)};
+// journey steps
+const scenes=[...document.querySelectorAll('.scene')],steps=$('#steps'),lw=$('#lw');
+function show(i){scenes.forEach((s,j)=>s.classList.toggle('on',i===j));[...steps.children].forEach((b,j)=>b.setAttribute('aria-selected',i===j));
+ const sl=scenes[i].querySelector('.slot');if(sl){sl.appendChild(lw);if(scenes[i].dataset.q){q.value=scenes[i].dataset.q;sel=0;run()}}}
+scenes.forEach((s,i)=>{const b=document.createElement('button');b.setAttribute('role','tab');b.textContent=s.dataset.t;b.onclick=()=>show(i);steps.appendChild(b)});
+$('#saveBtn').onclick=()=>{$('#saveToast').hidden=false;$('#saveBtn').textContent='★ Saved'};
+$('#goShare').onclick=()=>{share=true;$('#tShare').checked=true;$('#mShare').classList.add('on');show(3)};
+fill(document);renderArch();renderNotes(1);show(3);
+</script></body></html>
