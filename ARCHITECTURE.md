@@ -126,6 +126,21 @@ Migrations are **idempotent** — `run_migration()` handles `duplicate column` e
 | `schema_meta` | Key-value (currently just `version`) |
 | `knowledge_vector_changes` | Trigger-fed log of record ids whose cached query fields changed; drives the in-memory record cache (history: CH-0011) |
 
+### Items: one file per source (history: CH-0015)
+
+Things apps push (I Want Things saved items and visited pages first; later mail and HiComputer
+documents) live outside `memory.sqlite3`, one file per source: `items-<source>.sqlite3` next to it
+(`fieldcraft_storage::items`, source ids `[a-z0-9][a-z0-9_-]{0,63}`). Tables: `items` (keyed by
+`(source, external_id)`, with kind, title, body, url, author, timestamps, scope, display_safe,
+content_hash, seq), `item_chunks` (passages), `item_chunks_fts` (FTS5: title, passage body, url),
+`item_chunk_vectors` (one vector per passage and model tag), `item_source_meta` (connector cursor,
+change sequence). Passages follow I Want Things' rule (160-character title line, 800 body
+characters, 160 overlap, first 16,000 body characters) so vectors are comparable. Triggers keep FTS
+rows and vectors in step with passages; passages and vectors are rebuilt only when the title or body
+hash changes. Invariant: no lesson table, lesson ranking or maintenance job (cruft, dream,
+forgetting) opens an item file, and items never enter `knowledge`; deleting a source deletes its
+rows and then its file (review-only for the maintenance side; the server tests cover deletion).
+
 ### Key columns added across schema versions
 
 The schema has evolved by additive migration:
@@ -253,7 +268,7 @@ So vectors of two models are never compared, and switching models is: `fieldcraf
 --provider <new>` (old vectors stay), then switch the provider. Gemma prompts follow the model
 card (`task: search result | query: …` for queries, `title: none | text: …` for documents); the
 client checks the sidecar's `/v1/models` alias before its first request. Cosine thresholds (merge,
-near-twin, dream, resurrection) are per tag (`CosineThresholds`).
+near-twin, dream, resurrection) and the item-search dense floor are per tag (`CosineThresholds`).
 
 BM25-only is stated, never silent: the server logs it at start-up, `/status` carries an
 `embedding` block (provider, tag, `mode` dense or bm25-only, `ready`, `problem`, vectors per tag,
@@ -288,6 +303,18 @@ was removed (history: CH-0003) because MCP servers on client machines wrote
 to a local SQLite catalog regardless of `FIELDCRAFT_SERVER_URL`, creating a
 silent split-brain between client and server. The CLI-only design eliminates
 that class of bug.
+
+### Items API (history: CH-0015)
+
+`POST /items:batch` (`{source, cursor?, ops: [{op: upsert|delete, external_id, ...}]}`, applied in
+order in one transaction, per-op status, idempotent), `DELETE /sources/{source}` and `GET
+/search?q=&source=&kinds=&limit=` sit behind the same bearer token as every data route (no
+per-source token binding yet). After a batch, a background indexer per source embeds pending
+passages with the configured provider; it also runs at start-up. Search embeds the query on the
+`GET /lessons` deadline path, then on read-only connections ranks BM25 (best passage per item) and
+dense cosine over passages of the query's tag (at or above the tag's `item_dense_min`), fused with
+RRF k=60, plus a recency bonus of at most a tenth of a first place. Lesson retrieval is not part of
+`GET /search` yet.
 
 ### Query path and concurrency (history: CH-0011)
 

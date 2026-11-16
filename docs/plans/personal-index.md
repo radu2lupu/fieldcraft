@@ -3,8 +3,13 @@
 ## Status
 
 - Owner: Radu
-- Last updated: 2026-11-04
-- Current phase: architecture proposal; nothing built. Owner direction 2026-11-04: Fieldcraft is the
+- Last updated: 2026-11-16
+- Current phase: stage 1 (item model, per-source files, `POST /items:batch`, `DELETE /sources/<id>`)
+  and item search (`GET /search`, the items part of stage 3) built on lane
+  `t/d970ce23-fieldcraft-things-index` (CH-0015) on main, not on the local feat branches below; not
+  deployed. Not built: blobs (stage 1), stage 2 (source-bound
+  tokens, ACL, display contexts), lessons in `GET /search`, stages 4-8. The vector dimension
+  question of stage 0 is settled (both 768, see Current Evidence). Owner direction 2026-11-04: Fieldcraft is the
   storage backend for IWT things (IWT moves its things stack onto it), the nexus that collects all
   content, and gets its own Spotlight-style launcher. One decision remains open (offline on iPhone).
 - Extends [shared-memory-platform.md](shared-memory-platform.md) (one server on the Mac mini,
@@ -80,9 +85,12 @@ From a read of both repos on 2026-11-04 (paths are in those repos):
   embeddings and queries must never reach a backend. The mail plan: bodies stay on the device.
 - **Capacity on the mini** (eval/embed_capacity/RESULTS.md): about 57 passages per second for
   EmbeddingGemma 2 text, 485 MB resident, query p95 319 ms at 16 clients during bulk embedding.
-- **Dimension mismatch to verify.** IWT stores 1,028-byte int8 vectors described as 1024-dimensional;
-  Fieldcraft's Gemma provider uses 768. Same model family, so one of the two descriptions is wrong or
-  they use different output sizes. Must be one contract before any shared vector.
+- **Dimension: no mismatch (checked 2026-11-16).** IWT's search model `embeddinggemma2` is 768-dimensional
+  (`EmbeddingRuntime/Resources/models.json` lines 13, 54, 62), as is Fieldcraft's Gemma provider, with
+  the same query and document prompts. IWT stores 4 bytes of norm plus one int8 per dimension (772
+  bytes); the "1024d, 1028 bytes" text (`BrowserCore/LocalSearchPolicy.swift:119-120`, test at
+  `IWantThingsMacTests/LocalSemanticSearchTests.swift:173-178`) dates from the 1024-dimension Octen
+  profile. Fieldcraft keeps float32 vectors.
 
 ## Requirements
 
@@ -248,3 +256,7 @@ keeping two engines during the cutover; evidence that cross-kind results are act
 - 2026-11-04: owner direction: Fieldcraft is the things backend for IWT (not a copy indexer), the
   nexus for all content, and gets its own launcher; content may live on the owner's own server.
   Things API, launcher, stages 4-8 and gates G6-G7 added.
+- 2026-11-16: stage 1 and item search built (CH-0015): items in `items-<source>.sqlite3`, passages by
+  IWT's rule, `POST /items:batch`, `DELETE /sources/<id>`, `GET /search` (BM25 + dense over passages,
+  RRF k=60, mild recency, Gemma dense floor 0.6 from IWT's calibration). Dimension question settled:
+  both 768.

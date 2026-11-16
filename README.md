@@ -175,6 +175,7 @@ The installed instructions ask agents to:
 | Retrieval and scoring | `crates/fieldcraft-retrieval/src/retrieval.rs`, `cue_match.rs`, `sqlite_search.rs` |
 | Embedding providers and tags | `crates/fieldcraft-core/src/embedding.rs`, `crates/fieldcraft-retrieval/src/lib.rs`, `gemma.rs` |
 | Record cache (query-path scans) | `crates/fieldcraft-retrieval/src/record_cache.rs`, `crates/fieldcraft-storage/src/record_index.rs` |
+| Items (things apps push): store, search, API | `crates/fieldcraft-storage/src/items.rs`, `crates/fieldcraft-retrieval/src/items.rs`, `crates/fieldcraft-server/src/items.rs` |
 | Server, `trace-analyze`, `/stats`, auth | `crates/fieldcraft-server/src/lib.rs`, `auth.rs` |
 | CLI (all subcommands, HTTP client) | `crates/fieldcraft-cli/src/main.rs` |
 | Cue extraction | `crates/fieldcraft-core/src/cue_extract.rs` |
