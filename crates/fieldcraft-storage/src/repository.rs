@@ -1842,7 +1842,7 @@ impl KnowledgeRepository {
     /// vector for the record. Vectors of other tags are kept. A no-op for an
     /// id that is not in `knowledge`.
     pub fn store_vector_for_tag(&self, id: &str, tag: &str, vector: &[f32]) -> Result<(), TrError> {
-        let bytes: Vec<u8> = vector.iter().flat_map(|f| f.to_le_bytes()).collect();
+        let bytes = vector_to_blob(vector);
         self.conn
             .execute(
                 "INSERT INTO knowledge_vectors (knowledge_id, tag, dims, vector, created_at)
@@ -3009,6 +3009,11 @@ fn duplicate_score(
     }
 
     (dense_score * 0.72) + (cue_score * 0.18) + (text_score * 0.10)
+}
+
+/// Raw little-endian f32 bytes, the stored form of every dense vector.
+pub(crate) fn vector_to_blob(vector: &[f32]) -> Vec<u8> {
+    vector.iter().flat_map(|f| f.to_le_bytes()).collect()
 }
 
 pub(crate) fn blob_to_vector(bytes: &[u8]) -> Vec<f32> {
