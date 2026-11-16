@@ -827,12 +827,15 @@ fn upsert_in(
         return Ok(ItemOpStatus::Created);
     };
 
+    // Compare with the stored created_at before taking the new one; an
+    // omitted created_at keeps the stored value.
+    let created_changed = new.created_at.as_ref().is_some_and(|c| *c != created_at);
     let created_at = new.created_at.clone().unwrap_or(created_at);
     let content_changed = hash != new.content_hash;
     let metadata_changed = kind != new.kind
         || url != new.url
         || author != new.author
-        || new.created_at.as_ref().is_some_and(|c| *c != created_at)
+        || created_changed
         || source_updated_at != new.source_updated_at
         || scope != new.scope
         || (display_safe != 0) != new.display_safe;
@@ -1166,6 +1169,44 @@ mod tests {
         assert_eq!(
             store.get("t").unwrap().unwrap().created_at,
             "2026-11-01T08:00:00+00:00"
+        );
+    }
+
+    #[test]
+    fn created_at_only_change_is_a_metadata_update() {
+        let dir = tempdir().unwrap();
+        let mut store = ItemStore::open(dir.path(), "iwt").unwrap();
+        let mut item = ItemUpsert {
+            external_id: "a".into(),
+            kind: "save".into(),
+            title: "Lamp".into(),
+            created_at: Some("2026-01-01T00:00:00Z".into()),
+            ..Default::default()
+        };
+        store
+            .apply_batch(&[ItemOp::Upsert(item.clone())], None)
+            .unwrap();
+        item.created_at = Some("2025-06-01T00:00:00Z".into());
+        let out = store
+            .apply_batch(&[ItemOp::Upsert(item.clone())], None)
+            .unwrap();
+        assert_eq!(statuses(&out), vec![ItemOpStatus::MetadataUpdated]);
+        assert_eq!(out.seq, 2);
+        assert_eq!(
+            store.get("a").unwrap().unwrap().created_at,
+            "2025-06-01T00:00:00+00:00"
+        );
+        // The same value again, or none at all, changes nothing.
+        let out = store
+            .apply_batch(&[ItemOp::Upsert(item.clone())], None)
+            .unwrap();
+        assert_eq!(statuses(&out), vec![ItemOpStatus::Unchanged]);
+        item.created_at = None;
+        let out = store.apply_batch(&[ItemOp::Upsert(item)], None).unwrap();
+        assert_eq!(statuses(&out), vec![ItemOpStatus::Unchanged]);
+        assert_eq!(
+            store.get("a").unwrap().unwrap().created_at,
+            "2025-06-01T00:00:00+00:00"
         );
     }
 
