@@ -822,30 +822,7 @@ fn upsert_in(
         existing
     else {
         let created_at = new.created_at.clone().unwrap_or_else(|| now.clone());
-        tx.execute(
-            "INSERT INTO items (id, source, external_id, kind, title, body, url, author,
-                                created_at, updated_at, source_updated_at, scope, display_safe,
-                                content_hash, seq)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
-            params![
-                id,
-                source,
-                new.external_id,
-                new.kind,
-                new.title,
-                new.body,
-                new.url,
-                new.author,
-                created_at,
-                now,
-                new.source_updated_at,
-                new.scope,
-                new.display_safe as i64,
-                new.content_hash,
-                seq
-            ],
-        )
-        .map_err(sqlite_error)?;
+        write_item_row(tx, &id, source, new, &created_at, &now, seq)?;
         insert_chunks(tx, &id, &new.title, &new.body)?;
         return Ok(ItemOpStatus::Created);
     };
@@ -862,13 +839,41 @@ fn upsert_in(
     if !content_changed && !metadata_changed {
         return Ok(ItemOpStatus::Unchanged);
     }
+    write_item_row(tx, &id, source, new, &created_at, &now, seq)?;
+    if !content_changed {
+        return Ok(ItemOpStatus::MetadataUpdated);
+    }
+    tx.execute("DELETE FROM item_chunks WHERE item_id = ?1", [&id])
+        .map_err(sqlite_error)?;
+    insert_chunks(tx, &id, &new.title, &new.body)?;
+    Ok(ItemOpStatus::Updated)
+}
+
+/// Insert the item row, or overwrite every column but its key when it exists.
+fn write_item_row(
+    tx: &rusqlite::Transaction<'_>,
+    id: &str,
+    source: &str,
+    new: &NewItem,
+    created_at: &str,
+    now: &str,
+    seq: i64,
+) -> Result<(), TrError> {
     tx.execute(
-        "UPDATE items SET kind = ?2, title = ?3, body = ?4, url = ?5, author = ?6,
-                          created_at = ?7, updated_at = ?8, source_updated_at = ?9, scope = ?10,
-                          display_safe = ?11, content_hash = ?12, seq = ?13
-         WHERE id = ?1",
+        "INSERT INTO items (id, source, external_id, kind, title, body, url, author,
+                            created_at, updated_at, source_updated_at, scope, display_safe,
+                            content_hash, seq)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+         ON CONFLICT (id) DO UPDATE SET
+           kind = excluded.kind, title = excluded.title, body = excluded.body,
+           url = excluded.url, author = excluded.author, created_at = excluded.created_at,
+           updated_at = excluded.updated_at, source_updated_at = excluded.source_updated_at,
+           scope = excluded.scope, display_safe = excluded.display_safe,
+           content_hash = excluded.content_hash, seq = excluded.seq",
         params![
             id,
+            source,
+            new.external_id,
             new.kind,
             new.title,
             new.body,
@@ -884,13 +889,7 @@ fn upsert_in(
         ],
     )
     .map_err(sqlite_error)?;
-    if !content_changed {
-        return Ok(ItemOpStatus::MetadataUpdated);
-    }
-    tx.execute("DELETE FROM item_chunks WHERE item_id = ?1", [&id])
-        .map_err(sqlite_error)?;
-    insert_chunks(tx, &id, &new.title, &new.body)?;
-    Ok(ItemOpStatus::Updated)
+    Ok(())
 }
 
 fn insert_chunks(

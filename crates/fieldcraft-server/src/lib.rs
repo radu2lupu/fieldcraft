@@ -2182,6 +2182,15 @@ mod tests {
         state.tokens.mint(Some("test")).unwrap()
     }
 
+    fn seed_lesson(state: &AppState, id: &str, project_id: &str, retrieval_text: &str) {
+        state
+            .repo
+            .lock()
+            .unwrap()
+            .insert_knowledge(&make_record(id, project_id, retrieval_text))
+            .unwrap();
+    }
+
     async fn spawn_test_server(state: AppState) -> (String, tokio::task::JoinHandle<()>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -2571,18 +2580,8 @@ mod tests {
         let dir = tempdir().unwrap();
         let state = make_state(dir.path());
         let token = mint_token(&state);
-        state
-            .repo
-            .lock()
-            .unwrap()
-            .insert_knowledge(&make_record("status-1", "proj", "status one"))
-            .unwrap();
-        state
-            .repo
-            .lock()
-            .unwrap()
-            .insert_knowledge(&make_record("status-2", "other", "status two"))
-            .unwrap();
+        seed_lesson(&state, "status-1", "proj", "status one");
+        seed_lesson(&state, "status-2", "other", "status two");
         let app = router(state);
 
         let unauthenticated = app
@@ -2623,16 +2622,12 @@ mod tests {
         let dir = tempdir().unwrap();
         let state = make_state(dir.path());
         let token = mint_token(&state);
-        state
-            .repo
-            .lock()
-            .unwrap()
-            .insert_knowledge(&make_record(
-                "slug-canonical",
-                "field_notes",
-                "slug canonical sentinel",
-            ))
-            .unwrap();
+        seed_lesson(
+            &state,
+            "slug-canonical",
+            "field_notes",
+            "slug canonical sentinel",
+        );
         let repo = Arc::clone(&state.repo);
         let app = router(state);
 
@@ -2835,16 +2830,12 @@ mod tests {
         let dir = tempdir().unwrap();
         let state = make_state(dir.path());
         let token = mint_token(&state);
-        state
-            .repo
-            .lock()
-            .unwrap()
-            .insert_knowledge(&make_record(
-                "search-1",
-                "proj",
-                "feedback loop sentinel retrieval text",
-            ))
-            .unwrap();
+        seed_lesson(
+            &state,
+            "search-1",
+            "proj",
+            "feedback loop sentinel retrieval text",
+        );
         let repo = Arc::clone(&state.repo);
         let app = router(state);
 
@@ -3441,8 +3432,14 @@ mod tests {
         serde_json::from_slice(&bytes).unwrap()
     }
 
-    fn item_batch(source: &str, cursor: &str, ops: serde_json::Value) -> String {
-        serde_json::json!({ "source": source, "cursor": cursor, "ops": ops }).to_string()
+    fn item_batch_req(
+        token: &str,
+        source: &str,
+        cursor: &str,
+        ops: serde_json::Value,
+    ) -> Request<Body> {
+        let body = serde_json::json!({ "source": source, "cursor": cursor, "ops": ops });
+        authed_json_req("POST", "/items:batch", token, body.to_string())
     }
 
     fn item_counts(dir: &Path, source: &str) -> fieldcraft_storage::ItemCounts {
@@ -3478,12 +3475,7 @@ mod tests {
         ]);
         let first = app
             .clone()
-            .oneshot(authed_json_req(
-                "POST",
-                "/items:batch",
-                &token,
-                item_batch("iwt", "c-1", ops.clone()),
-            ))
+            .oneshot(item_batch_req(&token, "iwt", "c-1", ops.clone()))
             .await
             .unwrap();
         assert_eq!(first.status(), StatusCode::OK);
@@ -3501,12 +3493,7 @@ mod tests {
 
         let second = app
             .clone()
-            .oneshot(authed_json_req(
-                "POST",
-                "/items:batch",
-                &token,
-                item_batch("iwt", "c-1", ops),
-            ))
+            .oneshot(item_batch_req(&token, "iwt", "c-1", ops))
             .await
             .unwrap();
         let second = json_of(second).await;
@@ -3526,11 +3513,11 @@ mod tests {
 
         // A path-like source is refused before any file is named after it.
         let bad = app
-            .oneshot(authed_json_req(
-                "POST",
-                "/items:batch",
+            .oneshot(item_batch_req(
                 &token,
-                item_batch("../evil", "c", serde_json::json!([])),
+                "../evil",
+                "c",
+                serde_json::json!([]),
             ))
             .await
             .unwrap();
@@ -3543,16 +3530,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let state = make_state(dir.path());
         let token = mint_token(&state);
-        state
-            .repo
-            .lock()
-            .unwrap()
-            .insert_knowledge(&make_record(
-                "lesson-1",
-                "proj",
-                "grinder calibration lesson",
-            ))
-            .unwrap();
+        seed_lesson(&state, "lesson-1", "proj", "grinder calibration lesson");
         let lessons_before = knowledge_count(&state);
         let app = router(state.clone());
         let ops = serde_json::json!([
@@ -3564,12 +3542,7 @@ mod tests {
         ]);
         let resp = app
             .clone()
-            .oneshot(authed_json_req(
-                "POST",
-                "/items:batch",
-                &token,
-                item_batch("iwt", "c", ops),
-            ))
+            .oneshot(item_batch_req(&token, "iwt", "c", ops))
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
@@ -3642,12 +3615,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let state = make_state(dir.path());
         let token = mint_token(&state);
-        state
-            .repo
-            .lock()
-            .unwrap()
-            .insert_knowledge(&make_record("lesson-1", "proj", "pricing deck lesson"))
-            .unwrap();
+        seed_lesson(&state, "lesson-1", "proj", "pricing deck lesson");
         let lessons_before = knowledge_count(&state);
         let app = router(state.clone());
         for source in ["iwt", "mail"] {
@@ -3657,12 +3625,7 @@ mod tests {
             ]);
             let resp = app
                 .clone()
-                .oneshot(authed_json_req(
-                    "POST",
-                    "/items:batch",
-                    &token,
-                    item_batch(source, "c", ops),
-                ))
+                .oneshot(item_batch_req(&token, source, "c", ops))
                 .await
                 .unwrap();
             assert_eq!(resp.status(), StatusCode::OK);
@@ -3725,17 +3688,11 @@ mod tests {
         let body = json_of(resp).await;
         assert_eq!(body["deleted_items"], 0);
         assert_eq!(body["removed_file"], false);
+        let again = serde_json::json!([
+            {"op": "upsert", "external_id": "1", "kind": "save", "title": "Again"}
+        ]);
         let resp = app
-            .oneshot(authed_json_req(
-                "POST",
-                "/items:batch",
-                &token,
-                item_batch(
-                    "iwt",
-                    "c2",
-                    serde_json::json!([{"op": "upsert", "external_id": "1", "kind": "save", "title": "Again"}]),
-                ),
-            ))
+            .oneshot(item_batch_req(&token, "iwt", "c2", again))
             .await
             .unwrap();
         let body = json_of(resp).await;
