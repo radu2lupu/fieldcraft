@@ -283,7 +283,7 @@ pub(crate) fn identity_search_unscoped(
     Ok(hits)
 }
 
-fn query_terms(query: &str) -> Vec<String> {
+pub(crate) fn query_terms(query: &str) -> Vec<String> {
     query
         .split(|c: char| !c.is_alphanumeric() && c != '_')
         .filter(|t| t.len() >= 3)

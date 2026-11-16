@@ -1,5 +1,6 @@
 pub mod cue_match;
 mod gemma;
+pub mod items;
 pub mod query_embed;
 pub mod record_cache;
 pub mod retrieval;

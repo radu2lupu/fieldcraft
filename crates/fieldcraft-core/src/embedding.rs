@@ -76,6 +76,9 @@ pub struct CosineThresholds {
     pub dream_min: f32,
     /// L3 resurrection: an archived lesson matches a live query.
     pub resurrection_min: f32,
+    /// Item search: a passage below this cosine to the query is not a dense
+    /// candidate (`GET /search`). Lessons do not use it.
+    pub item_dense_min: f32,
 }
 
 /// Calibrated on the production store with Gemini vectors (2026-06/07).
@@ -84,6 +87,8 @@ pub const GEMINI_THRESHOLDS: CosineThresholds = CosineThresholds {
     near_twin_min: 0.85,
     dream_min: 0.80,
     resurrection_min: 0.85,
+    // Not calibrated for items: every passage is a dense candidate.
+    item_dense_min: 0.0,
 };
 
 /// Calibrated 2026-11-01 on a copy of the production store by quantile matching
@@ -98,6 +103,9 @@ pub const GEMMA_THRESHOLDS: CosineThresholds = CosineThresholds {
     near_twin_min: 0.875,
     dream_min: 0.835,
     resurrection_min: 0.875,
+    // I Want Things' calibrated `denseFloor` for the same model and prompts
+    // (`EmbeddingRuntime/Resources/models.json`, profile `embeddinggemma2`).
+    item_dense_min: 0.6,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]

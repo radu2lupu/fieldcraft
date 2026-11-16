@@ -21,6 +21,7 @@ use walkdir::WalkDir;
 
 pub mod cue_backfill;
 pub mod import;
+pub mod items;
 pub mod leiden;
 pub mod maintenance;
 pub mod memories;
@@ -32,6 +33,11 @@ pub mod skills;
 
 pub use cue_backfill::{BackfillStats, backfill_all};
 pub use import::{ImportRecord, ImportStore};
+pub use items::{
+    BatchOutcome, ItemChunkVector, ItemCounts, ItemOp, ItemOpResult, ItemOpStatus, ItemRow,
+    ItemStore, ItemTextHit, ItemUpsert, item_passages, items_db_path, list_item_sources,
+    remove_item_source_files, validate_source_id,
+};
 pub use maintenance::{
     AnalysisReport, LessonFinding, LifecycleCandidate, LifecycleReport, ProjectStats,
     ReportSummary, SuggestedAction, analyze_report, lifecycle_report,

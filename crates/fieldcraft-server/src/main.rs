@@ -4,6 +4,7 @@
 //!   - memory.sqlite3      (KnowledgeRepository + MemoryRepository)
 //!   - .tr-source-sessions.sqlite3 (source sessions)
 //!   - tokens.sqlite3      (auth tokens)
+//!   - items-<source>.sqlite3 (items pushed by apps, opened on first use)
 //!
 //! Optional: --scan-local-sessions scans ~/.codex and ~/.claude at startup
 //! and every 30 minutes, inserting new sessions into source_sessions.
@@ -140,7 +141,10 @@ async fn main() -> anyhow::Result<()> {
         tokens,
         db_path: knowledge_path,
         enroll_policy: EnrollPolicy::from_env(),
+        items: Arc::new(fieldcraft_server::items::ItemSources::new(data_dir.clone())),
     };
+    // Embed passages left without vectors (provider was down, or switched).
+    state.items.spawn_all_indexers();
 
     // Optional background scan of local session directories.
     if args.scan_local_sessions {

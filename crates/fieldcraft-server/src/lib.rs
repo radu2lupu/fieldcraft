@@ -5,6 +5,7 @@
 //!   POST /lessons        — bearer required
 //!   GET  /lessons        — bearer required
 //!   POST /sessions/import — bearer required
+//!   POST /items:batch, DELETE /sources/{source}, GET /search — bearer required (see `items`)
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -17,7 +18,7 @@ use axum::{
     http::{HeaderMap, HeaderName, Method, StatusCode, Uri, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{get, patch, post},
+    routing::{delete, get, patch, post},
 };
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
@@ -42,6 +43,7 @@ pub struct TokenOwner(pub Option<String>);
 
 pub mod auth;
 pub mod error;
+pub mod items;
 pub mod memories;
 pub mod readers;
 
@@ -74,6 +76,9 @@ pub struct AppState {
     pub db_path: PathBuf,
     /// Who may mint tokens via `POST /enroll`.
     pub enroll_policy: EnrollPolicy,
+    /// Items pushed by apps, one SQLite file per source next to `db_path`
+    /// (`items-<source>.sqlite3`); never read by lesson retrieval or maintenance.
+    pub items: Arc<items::ItemSources>,
 }
 
 #[derive(Clone)]
@@ -137,6 +142,9 @@ pub fn router(state: AppState) -> Router {
             "/learning/sources/{id}/fail",
             post(fail_learning_source_handler),
         )
+        .route("/items:batch", post(items::batch_handler))
+        .route("/sources/{source}", delete(items::delete_source_handler))
+        .route("/search", get(items::search_handler))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             bearer_auth_middleware,
@@ -2062,6 +2070,7 @@ mod tests {
             tokens,
             db_path: knowledge_path,
             enroll_policy: EnrollPolicy::default(),
+            items: Arc::new(items::ItemSources::new(dir.to_path_buf())),
         }
     }
 
@@ -3419,5 +3428,319 @@ mod tests {
             )
             .unwrap();
         assert_eq!(event_count_after_rerun, 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // Items: POST /items:batch, DELETE /sources/{source}, GET /search
+    // -----------------------------------------------------------------------
+
+    async fn json_of(resp: Response) -> serde_json::Value {
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    fn item_batch(source: &str, cursor: &str, ops: serde_json::Value) -> String {
+        serde_json::json!({ "source": source, "cursor": cursor, "ops": ops }).to_string()
+    }
+
+    fn item_counts(dir: &Path, source: &str) -> fieldcraft_storage::ItemCounts {
+        fieldcraft_storage::ItemStore::open_reader(dir, source)
+            .unwrap()
+            .counts()
+            .unwrap()
+    }
+
+    fn knowledge_count(state: &AppState) -> i64 {
+        state
+            .repo
+            .lock()
+            .unwrap()
+            .connection()
+            .query_row("SELECT COUNT(*) FROM knowledge", [], |r| r.get(0))
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn items_batch_is_idempotent_and_reports_status_and_cursor() {
+        let dir = tempdir().unwrap();
+        let state = make_state(dir.path());
+        let token = mint_token(&state);
+        let app = router(state);
+        let ops = serde_json::json!([
+            {"op": "upsert", "external_id": "x.com/1", "kind": "like",
+             "title": "Espresso grinder thread", "body": "burr grinders compared",
+             "url": "https://x.com/1", "source_updated_at": "2026-11-01T00:00:00Z"},
+            {"op": "upsert", "external_id": "x.com/2", "kind": "bookmark", "title": "Rust"},
+            {"op": "delete", "external_id": "never-saved"},
+            {"op": "upsert", "external_id": "", "kind": "save"}
+        ]);
+        let first = app
+            .clone()
+            .oneshot(authed_json_req(
+                "POST",
+                "/items:batch",
+                &token,
+                item_batch("iwt", "c-1", ops.clone()),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(first.status(), StatusCode::OK);
+        let first = json_of(first).await;
+        let statuses: Vec<&str> = first["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["status"].as_str().unwrap())
+            .collect();
+        assert_eq!(statuses, vec!["created", "created", "not_found", "error"]);
+        assert_eq!(first["cursor"], "c-1");
+        assert_eq!(first["seq"], 2);
+        let counts = item_counts(dir.path(), "iwt");
+
+        let second = app
+            .clone()
+            .oneshot(authed_json_req(
+                "POST",
+                "/items:batch",
+                &token,
+                item_batch("iwt", "c-1", ops),
+            ))
+            .await
+            .unwrap();
+        let second = json_of(second).await;
+        let statuses: Vec<&str> = second["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["status"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            statuses,
+            vec!["unchanged", "unchanged", "not_found", "error"]
+        );
+        assert_eq!(second["seq"], 2);
+        assert_eq!(item_counts(dir.path(), "iwt"), counts);
+        assert_eq!(counts.items, 2);
+
+        // A path-like source is refused before any file is named after it.
+        let bad = app
+            .oneshot(authed_json_req(
+                "POST",
+                "/items:batch",
+                &token,
+                item_batch("../evil", "c", serde_json::json!([])),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(bad.status(), StatusCode::BAD_REQUEST);
+        assert!(!dir.path().join("items-../evil.sqlite3").exists());
+    }
+
+    #[tokio::test]
+    async fn item_search_finds_items_by_keyword_and_never_lessons() {
+        let dir = tempdir().unwrap();
+        let state = make_state(dir.path());
+        let token = mint_token(&state);
+        state
+            .repo
+            .lock()
+            .unwrap()
+            .insert_knowledge(&make_record(
+                "lesson-1",
+                "proj",
+                "grinder calibration lesson",
+            ))
+            .unwrap();
+        let lessons_before = knowledge_count(&state);
+        let app = router(state.clone());
+        let ops = serde_json::json!([
+            {"op": "upsert", "external_id": "a", "kind": "save",
+             "title": "Burr grinder review", "body": "a long review of the grinder",
+             "url": "https://example.com/grinder"},
+            {"op": "upsert", "external_id": "b", "kind": "visit",
+             "title": "Weather", "body": "rain tomorrow"}
+        ]);
+        let resp = app
+            .clone()
+            .oneshot(authed_json_req(
+                "POST",
+                "/items:batch",
+                &token,
+                item_batch("iwt", "c", ops),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        // Items never enter the lesson table.
+        assert_eq!(knowledge_count(&state), lessons_before);
+
+        let resp = app
+            .clone()
+            .oneshot(authed_req("GET", "/search?q=grinder&limit=5", &token))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = json_of(resp).await;
+        let results = body["results"].as_array().unwrap();
+        assert_eq!(results.len(), 1, "{body}");
+        let hit = &results[0];
+        assert_eq!(hit["source"], "iwt");
+        assert_eq!(hit["external_id"], "a");
+        assert_eq!(hit["kind"], "save");
+        assert_eq!(hit["title"], "Burr grinder review");
+        assert_eq!(hit["url"], "https://example.com/grinder");
+        assert!(hit["snippet"].as_str().unwrap().contains("grinder"));
+        assert!(hit["score"].as_f64().unwrap() > 0.0);
+
+        // Filters: kinds and source.
+        let resp = app
+            .clone()
+            .oneshot(authed_req(
+                "GET",
+                "/search?q=grinder&kinds=visit,like",
+                &token,
+            ))
+            .await
+            .unwrap();
+        assert!(
+            json_of(resp).await["results"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        let resp = app
+            .clone()
+            .oneshot(authed_req("GET", "/search?q=grinder&source=mail", &token))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(
+            json_of(resp).await["results"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        assert!(!dir.path().join("items-mail.sqlite3").exists());
+
+        // Bearer required, like every data route.
+        let anon = app
+            .oneshot(
+                Request::builder()
+                    .uri("/search?q=grinder")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(anon.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn delete_source_removes_everything_of_that_source_and_nothing_else() {
+        let dir = tempdir().unwrap();
+        let state = make_state(dir.path());
+        let token = mint_token(&state);
+        state
+            .repo
+            .lock()
+            .unwrap()
+            .insert_knowledge(&make_record("lesson-1", "proj", "pricing deck lesson"))
+            .unwrap();
+        let lessons_before = knowledge_count(&state);
+        let app = router(state.clone());
+        for source in ["iwt", "mail"] {
+            let ops = serde_json::json!([
+                {"op": "upsert", "external_id": "1", "kind": "save",
+                 "title": "Pricing deck", "body": "pricing ".repeat(300)}
+            ]);
+            let resp = app
+                .clone()
+                .oneshot(authed_json_req(
+                    "POST",
+                    "/items:batch",
+                    &token,
+                    item_batch(source, "c", ops),
+                ))
+                .await
+                .unwrap();
+            assert_eq!(resp.status(), StatusCode::OK);
+        }
+        // Give iwt vectors too, so deletion is shown to take them.
+        state
+            .items
+            .with_writer("iwt", |store| {
+                let pending = store.chunks_missing_vector("test:tag:2", 100)?;
+                let rows: Vec<(i64, Vec<f32>)> = pending
+                    .into_iter()
+                    .map(|(id, _)| (id, vec![1.0, 0.0]))
+                    .collect();
+                store.store_chunk_vectors("test:tag:2", &rows)
+            })
+            .unwrap();
+        let mail_before = item_counts(dir.path(), "mail");
+        assert!(item_counts(dir.path(), "iwt").vectors > 0);
+
+        let resp = app
+            .clone()
+            .oneshot(authed_req("DELETE", "/sources/iwt", &token))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = json_of(resp).await;
+        assert_eq!(body["deleted_items"], 1);
+        assert_eq!(body["removed_file"], true);
+        for suffix in ["", "-wal", "-shm"] {
+            assert!(
+                !dir.path()
+                    .join(format!("items-iwt.sqlite3{suffix}"))
+                    .exists(),
+                "{suffix}"
+            );
+        }
+        assert_eq!(item_counts(dir.path(), "mail"), mail_before);
+        assert_eq!(knowledge_count(&state), lessons_before);
+
+        let resp = app
+            .clone()
+            .oneshot(authed_req("GET", "/search?q=pricing", &token))
+            .await
+            .unwrap();
+        let body = json_of(resp).await;
+        let sources: Vec<&str> = body["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["source"].as_str().unwrap())
+            .collect();
+        assert_eq!(sources, vec!["mail"]);
+
+        // Deleting again is harmless; writing again starts a fresh file.
+        let resp = app
+            .clone()
+            .oneshot(authed_req("DELETE", "/sources/iwt", &token))
+            .await
+            .unwrap();
+        let body = json_of(resp).await;
+        assert_eq!(body["deleted_items"], 0);
+        assert_eq!(body["removed_file"], false);
+        let resp = app
+            .oneshot(authed_json_req(
+                "POST",
+                "/items:batch",
+                &token,
+                item_batch(
+                    "iwt",
+                    "c2",
+                    serde_json::json!([{"op": "upsert", "external_id": "1", "kind": "save", "title": "Again"}]),
+                ),
+            ))
+            .await
+            .unwrap();
+        let body = json_of(resp).await;
+        assert_eq!(body["results"][0]["status"], "created");
+        assert_eq!(body["seq"], 1);
+        assert_eq!(item_counts(dir.path(), "iwt").items, 1);
     }
 }
